@@ -1,4 +1,7 @@
 const express = require('express');
+const session = require('express-session');
+const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
 const {
@@ -6,8 +9,10 @@ const {
     importQuizFromJSON, upsertWrongQuestion, getRandomWrongQuestions,
     markCorrect, markWrong, getWrongCount, saveExamHistory, getProgress,
     getWeakDomains, createSubject, getSubjects, getSubjectById,
-    updateSubject, deleteSubject, getSubjectQuestionCount, getDB
+    updateSubject, deleteSubject, getSubjectQuestionCount, getDB,
+    createUser, findUserByEmail, findUserByToken, activateUser, getUserById
 } = require('./db');
+const { sendActivationEmail } = require('./email');
 const { generateQuiz } = require('./ai-gen');
 const { exec } = require('child_process');
 
@@ -23,6 +28,18 @@ let serverInstance = null;
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
+// ─── Session ───
+app.use(session({
+    secret: process.env.SESSION_SECRET || 'dev-secret-change-me',
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        maxAge: 30 * 24 * 60 * 60 * 1000  // 30 days
+    }
+}));
+
 // SPA fallback: serve index.html for all non-API routes
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
@@ -33,24 +50,136 @@ app.get('/exam', (req, res) => {
 app.get('/review', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
+app.get('/activate', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+// ─── Auth Routes (public) ───
+
+app.post('/api/auth/register', async (req, res) => {
+    const { email, password } = req.body;
+
+    // Validate
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        return res.status(400).json({ error: '请输入有效的邮箱地址' });
+    }
+    if (!password || password.length < 6) {
+        return res.status(400).json({ error: '密码长度至少 6 位' });
+    }
+
+    // Check duplicate
+    const existing = findUserByEmail(email.toLowerCase().trim());
+    if (existing) {
+        return res.status(400).json({ error: '该邮箱已注册' });
+    }
+
+    try {
+        const hash = await bcrypt.hash(password, 12);
+        const token = crypto.randomBytes(32).toString('hex');
+        const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+        const userId = createUser(email.toLowerCase().trim(), hash, token, expiresAt);
+
+        // Send activation email
+        await sendActivationEmail(email.toLowerCase().trim(), token);
+
+        res.json({ success: true, message: '注册成功，请查收激活邮件' });
+    } catch (err) {
+        res.status(500).json({ error: '注册失败：' + err.message });
+    }
+});
+
+app.post('/api/auth/activate', (req, res) => {
+    const { token } = req.body;
+    if (!token) {
+        return res.status(400).json({ error: '缺少激活令牌' });
+    }
+
+    const user = findUserByToken(token);
+    if (!user) {
+        return res.status(400).json({ error: '无效的激活链接' });
+    }
+
+    if (user.is_active) {
+        return res.json({ success: true, message: '账户已激活，请直接登录' });
+    }
+
+    if (new Date(user.activation_expires_at) < new Date()) {
+        return res.status(400).json({ error: '激活链接已过期，请重新注册' });
+    }
+
+    activateUser(user.id);
+    res.json({ success: true, message: '账户激活成功！请登录' });
+});
+
+app.post('/api/auth/login', async (req, res) => {
+    const { email, password } = req.body;
+    if (!email || !password) {
+        return res.status(400).json({ error: '请输入邮箱和密码' });
+    }
+
+    const user = findUserByEmail(email.toLowerCase().trim());
+    if (!user) {
+        return res.status(401).json({ error: '邮箱或密码错误' });
+    }
+
+    const match = await bcrypt.compare(password, user.password_hash);
+    if (!match) {
+        return res.status(401).json({ error: '邮箱或密码错误' });
+    }
+
+    if (!user.is_active) {
+        return res.status(403).json({ error: '账户未激活，请查收激活邮件' });
+    }
+
+    req.session.userId = user.id;
+    req.session.email = user.email;
+    res.json({ success: true, user: { id: user.id, email: user.email } });
+});
+
+app.post('/api/auth/logout', (req, res) => {
+    req.session.destroy(() => {
+        res.json({ success: true });
+    });
+});
+
+app.get('/api/auth/me', (req, res) => {
+    if (!req.session.userId) {
+        return res.json({ user: null });
+    }
+    const user = getUserById(req.session.userId);
+    res.json({ user: user || null });
+});
+
+// ─── Auth Middleware ───
+
+function requireAuth(req, res, next) {
+    if (!req.session.userId) {
+        return res.status(401).json({ error: '请先登录', code: 'AUTH_REQUIRED' });
+    }
+    req.userId = req.session.userId;
+    next();
+}
+
+// All API routes below require auth
+app.use('/api', requireAuth);
 
 // ─── Subject APIs ───
 
 app.get('/api/subjects', (req, res) => {
-    const subjects = getSubjects();
+    const subjects = getSubjects(req.userId);
     const result = subjects.map(s => ({
         ...s,
-        questionCount: getSubjectQuestionCount(s.id),
-        wrongCount: getWrongCount(s.id)
+        questionCount: getSubjectQuestionCount(req.userId, s.id),
+        wrongCount: getWrongCount(req.userId, s.id)
     }));
     res.json(result);
 });
 
 app.get('/api/subject/:id', (req, res) => {
-    const subject = getSubjectById(req.params.id);
+    const subject = getSubjectById(req.userId, parseInt(req.params.id));
     if (!subject) return res.status(404).json({ error: '学科不存在' });
-    const questionCount = getSubjectQuestionCount(subject.id);
-    const wrongCount = getWrongCount(subject.id);
+    const questionCount = getSubjectQuestionCount(req.userId, subject.id);
+    const wrongCount = getWrongCount(req.userId, subject.id);
     res.json({ ...subject, questionCount, wrongCount });
 });
 
@@ -58,7 +187,7 @@ app.post('/api/subjects', (req, res) => {
     const { name, description } = req.body;
     if (!name || !name.trim()) return res.status(400).json({ error: '学科名称不能为空' });
     try {
-        const id = createSubject(name.trim(), description || '');
+        const id = createSubject(req.userId, name.trim(), description || '');
         res.json({ id, name: name.trim() });
     } catch (err) {
         res.status(400).json({ error: err.message });
@@ -68,7 +197,7 @@ app.post('/api/subjects', (req, res) => {
 app.put('/api/subjects/:id', (req, res) => {
     const { name, description, quizCount } = req.body;
     try {
-        updateSubject(parseInt(req.params.id), name, description, quizCount !== undefined ? parseInt(quizCount) : undefined);
+        updateSubject(req.userId, parseInt(req.params.id), name, description, quizCount !== undefined ? parseInt(quizCount) : undefined);
         res.json({ success: true });
     } catch (err) {
         res.status(400).json({ error: err.message });
@@ -76,7 +205,7 @@ app.put('/api/subjects/:id', (req, res) => {
 });
 
 app.delete('/api/subjects/:id', (req, res) => {
-    deleteSubject(parseInt(req.params.id));
+    deleteSubject(req.userId, parseInt(req.params.id));
     res.json({ success: true });
 });
 
@@ -85,7 +214,7 @@ app.delete('/api/subjects/:id', (req, res) => {
 app.get('/api/quiz/:subjectId', (req, res) => {
     const subjectId = parseInt(req.params.subjectId);
     const count = req.query.random ? parseInt(req.query.random) : 0;
-    const data = count > 0 ? getRandomQuestions(subjectId, count) : getQuestionsBySubject(subjectId);
+    const data = count > 0 ? getRandomQuestions(req.userId, subjectId, count) : getQuestionsBySubject(req.userId, subjectId);
     if (!data || data.length === 0) {
         return res.status(404).json({ error: '该学科暂无题目' });
     }
@@ -93,16 +222,16 @@ app.get('/api/quiz/:subjectId', (req, res) => {
 });
 
 app.get('/api/sources/:subjectId', (req, res) => {
-    const sources = getSources(req.params.subjectId);
+    const sources = getSources(req.userId, req.params.subjectId);
     res.json(sources);
 });
 
 app.post('/api/submit', (req, res) => {
     const { source, wrongQuestions, totalQuestions, correctCount, score, subjectId } = req.body;
     for (const q of wrongQuestions) {
-        upsertWrongQuestion(String(q.id), JSON.stringify(q), source, subjectId);
+        upsertWrongQuestion(req.userId, String(q.id), JSON.stringify(q), source, subjectId);
     }
-    saveExamHistory(source, totalQuestions, correctCount, score, subjectId);
+    saveExamHistory(req.userId, source, totalQuestions, correctCount, score, subjectId);
     res.json({ saved: wrongQuestions.length });
 });
 
@@ -111,7 +240,7 @@ app.post('/api/submit', (req, res) => {
 app.get('/api/review', (req, res) => {
     const subjectId = req.query.subjectId ? parseInt(req.query.subjectId) : null;
     const count = req.query.count ? parseInt(req.query.count) : 10;
-    const questions = getRandomWrongQuestions(count, subjectId);
+    const questions = getRandomWrongQuestions(req.userId, count, subjectId);
     res.json(questions);
 });
 
@@ -120,9 +249,9 @@ app.post('/api/review/submit', (req, res) => {
     let mastered = 0;
     for (const r of results) {
         if (r.isCorrect) {
-            if (markCorrect(r.id)) mastered++;
+            if (markCorrect(req.userId, r.id)) mastered++;
         } else {
-            markWrong(r.id);
+            markWrong(req.userId, r.id);
         }
     }
     res.json({ mastered });
@@ -131,12 +260,12 @@ app.post('/api/review/submit', (req, res) => {
 // ─── Analytics APIs ───
 
 app.get('/api/progress/:subjectId', (req, res) => {
-    const data = getProgress(parseInt(req.params.subjectId));
+    const data = getProgress(req.userId, parseInt(req.params.subjectId));
     res.json(data);
 });
 
 app.get('/api/weakness/:subjectId', (req, res) => {
-    const data = getWeakDomains(parseInt(req.params.subjectId));
+    const data = getWeakDomains(req.userId, parseInt(req.params.subjectId));
     res.json(data);
 });
 
@@ -144,7 +273,7 @@ app.get('/api/weakness/:subjectId', (req, res) => {
 
 app.post('/api/aigen', async (req, res) => {
     const { subjectId, questionCount } = req.body;
-    const subject = getSubjectById(subjectId);
+    const subject = getSubjectById(req.userId, subjectId);
     if (!subject) return res.status(404).json({ error: '学科不存在' });
 
     const envPath = path.join(__dirname, '.env');
@@ -157,7 +286,7 @@ app.post('/api/aigen', async (req, res) => {
         const quizData = await generateQuiz(subject.name, subject.description || '无特殊说明', count);
 
         const source = String(Date.now()).slice(-6);
-        insertQuestions(subjectId, quizData, source);
+        insertQuestions(req.userId, subjectId, quizData, source);
 
         const inputsDir = path.join(__dirname, 'inputs');
         if (!fs.existsSync(inputsDir)) fs.mkdirSync(inputsDir);
@@ -181,10 +310,10 @@ function startServer() {
 
 async function subjectMenu(inquirer) {
     while (true) {
-        const subjects = getSubjects();
+        const subjects = getSubjects(1); // CLI uses migrated user
         const choices = subjects.map(s => {
-            const count = getSubjectQuestionCount(s.id);
-            const wrongCount = getWrongCount(s.id);
+            const count = getSubjectQuestionCount(1, s.id);
+            const wrongCount = getWrongCount(1, s.id);
             const suffix = wrongCount > 0 ? ` (${count}题, ${wrongCount}错题)` : ` (${count}题)`;
             return { name: `${s.name}${suffix}`, value: s.id };
         });
@@ -214,7 +343,7 @@ async function subjectMenu(inquirer) {
                 { type: 'input', name: 'description', message: '学科描述（可选）：', default: '' }
             ]);
             try {
-                createSubject(name.trim(), description.trim());
+                createSubject(1, name.trim(), description.trim());
                 console.log(`\n学科「${name.trim()}」创建成功！\n`);
             } catch (err) {
                 console.log(`\n创建失败: ${err.message}\n`);
@@ -223,9 +352,9 @@ async function subjectMenu(inquirer) {
         }
 
         // Subject operations - only import is CLI-only
-        const subject = getSubjectById(action);
-        const wrongCount = getWrongCount(action);
-        const questionCount = getSubjectQuestionCount(action);
+        const subject = getSubjectById(1, action);
+        const wrongCount = getWrongCount(1, action);
+        const questionCount = getSubjectQuestionCount(1, action);
 
         const opChoices = [
             { name: '导入试题 (JSON 文件)', value: 'import' },
@@ -252,7 +381,7 @@ async function subjectMenu(inquirer) {
                 { type: 'input', name: 'source', message: '题集标识：', default: baseName }
             ]);
             try {
-                const count = importQuizFromJSON(resolved, source, action);
+                const count = importQuizFromJSON(1, resolved, source, action);
                 console.log(`成功导入 ${count} 道试题！`);
             } catch (err) {
                 console.log(`导入失败: ${err.message}`);

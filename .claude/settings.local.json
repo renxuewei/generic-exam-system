@@ -11,7 +11,9 @@
       "Bash(rm -f quiz.db quiz.db-shm quiz.db-wal)",
       "Bash(timeout 6 node server.js)",
       "Bash(curl -s http://localhost:3000/api/subjects)",
-      "Bash(node:*)"
+      "Bash(node:*)",
+      "Bash(npm install:*)",
+      "Bash(VERCEL=1 node -e \":*)"
     ]
   }
 }

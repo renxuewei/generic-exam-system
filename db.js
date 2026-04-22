@@ -31,6 +31,16 @@ function initDB() {
         db.exec(`
             CREATE TABLE IF NOT EXISTS _meta (key TEXT PRIMARY KEY, value TEXT);
 
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                is_active INTEGER DEFAULT 0,
+                activation_token TEXT,
+                activation_expires_at TEXT,
+                created_at TEXT DEFAULT (datetime('now', 'localtime'))
+            );
+
             CREATE TABLE IF NOT EXISTS subjects (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL UNIQUE,
@@ -74,6 +84,10 @@ function initDB() {
                 subject_id INTEGER REFERENCES subjects(id)
             );
         `);
+
+        // ─── Migration: add user_id to existing tables ───
+        runMigration();
+
     } catch (err) {
         console.error('Failed to create database tables:', err.message);
         throw new Error(`Database schema creation failed: ${err.message}`);
@@ -83,77 +97,151 @@ function initDB() {
 }
 
 /**
+ * Run schema migration to add user_id columns and indexes
+ */
+function runMigration() {
+    // Insert migration user (id=1) to preserve foreign key integrity
+    db.prepare(`
+        INSERT OR IGNORE INTO users (id, email, password_hash, is_active, activation_token, created_at)
+        VALUES (1, 'migrated@system', 'no-login', 1, NULL, datetime('now', 'localtime'))
+    `).run();
+
+    // Add user_id to subjects
+    if (!columnExists('subjects', 'user_id')) {
+        db.prepare('ALTER TABLE subjects ADD COLUMN user_id INTEGER DEFAULT 1').run();
+    }
+    // Add user_id to questions
+    if (!columnExists('questions', 'user_id')) {
+        db.prepare('ALTER TABLE questions ADD COLUMN user_id INTEGER DEFAULT 1').run();
+    }
+    // Add user_id to wrong_questions
+    if (!columnExists('wrong_questions', 'user_id')) {
+        db.prepare('ALTER TABLE wrong_questions ADD COLUMN user_id INTEGER DEFAULT 1').run();
+    }
+    // Add user_id to exam_history
+    if (!columnExists('exam_history', 'user_id')) {
+        db.prepare('ALTER TABLE exam_history ADD COLUMN user_id INTEGER DEFAULT 1').run();
+    }
+
+    // Recreate composite indexes with user_id
+    db.exec(`
+        DROP INDEX IF EXISTS idx_qid_source;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_qid_source_user
+            ON questions(question_id, source, user_id);
+
+        DROP INDEX IF EXISTS idx_wq_source;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_wq_source_user
+            ON wrong_questions(question_id, source, user_id);
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_subject_user_name
+            ON subjects(user_id, name);
+    `);
+}
+
+/**
  * Check if a column exists in a table
  */
 function columnExists(tableName, columnName) {
     const info = db.pragma(`table_info(${tableName})`);
     return info.some(col => col.name === columnName);
 }
-// ─── Subject CRUD ───
 
-function createSubject(name, description = '') {
-    const result = db.prepare('INSERT INTO subjects (name, description) VALUES (?, ?)').run(name, description);
+// ─── User CRUD ───
+
+function createUser(email, passwordHash, token, expiresAt) {
+    const result = db.prepare(
+        'INSERT INTO users (email, password_hash, activation_token, activation_expires_at) VALUES (?, ?, ?, ?)'
+    ).run(email, passwordHash, token, expiresAt);
     return result.lastInsertRowid;
 }
 
-function getSubjects() {
-    return db.prepare('SELECT * FROM subjects ORDER BY id').all();
+function findUserByEmail(email) {
+    return db.prepare('SELECT * FROM users WHERE email = ?').get(email);
 }
 
-function getSubjectById(id) {
-    return db.prepare('SELECT * FROM subjects WHERE id = ?').get(id);
+function findUserByToken(token) {
+    return db.prepare('SELECT * FROM users WHERE activation_token = ?').get(token);
 }
 
-function updateSubject(id, name, description, quizCount) {
+function activateUser(userId) {
+    db.prepare(
+        'UPDATE users SET is_active = 1, activation_token = NULL, activation_expires_at = NULL WHERE id = ?'
+    ).run(userId);
+}
+
+function getUserById(id) {
+    return db.prepare('SELECT id, email, is_active, created_at FROM users WHERE id = ?').get(id);
+}
+
+// ─── Subject CRUD ───
+
+function createSubject(userId, name, description = '') {
+    const result = db.prepare(
+        'INSERT INTO subjects (name, description, user_id) VALUES (?, ?, ?)'
+    ).run(name, description, userId);
+    return result.lastInsertRowid;
+}
+
+function getSubjects(userId) {
+    return db.prepare('SELECT * FROM subjects WHERE user_id = ? ORDER BY id').all(userId);
+}
+
+function getSubjectById(userId, id) {
+    return db.prepare('SELECT * FROM subjects WHERE id = ? AND user_id = ?').get(id, userId);
+}
+
+function updateSubject(userId, id, name, description, quizCount) {
     if (name !== undefined) {
-        db.prepare('UPDATE subjects SET name = ? WHERE id = ?').run(name, id);
+        db.prepare('UPDATE subjects SET name = ? WHERE id = ? AND user_id = ?').run(name, id, userId);
     }
     if (description !== undefined) {
-        db.prepare('UPDATE subjects SET description = ? WHERE id = ?').run(description, id);
+        db.prepare('UPDATE subjects SET description = ? WHERE id = ? AND user_id = ?').run(description, id, userId);
     }
     if (quizCount !== undefined) {
-        db.prepare('UPDATE subjects SET quiz_count = ? WHERE id = ?').run(quizCount, id);
+        db.prepare('UPDATE subjects SET quiz_count = ? WHERE id = ? AND user_id = ?').run(quizCount, id, userId);
     }
 }
 
-function deleteSubject(id) {
-    db.prepare('DELETE FROM exam_history WHERE subject_id = ?').run(id);
-    db.prepare('DELETE FROM wrong_questions WHERE subject_id = ?').run(id);
-    db.prepare('DELETE FROM questions WHERE subject_id = ?').run(id);
-    db.prepare('DELETE FROM subjects WHERE id = ?').run(id);
+function deleteSubject(userId, id) {
+    db.prepare('DELETE FROM exam_history WHERE subject_id = ? AND user_id = ?').run(id, userId);
+    db.prepare('DELETE FROM wrong_questions WHERE subject_id = ? AND user_id = ?').run(id, userId);
+    db.prepare('DELETE FROM questions WHERE subject_id = ? AND user_id = ?').run(id, userId);
+    db.prepare('DELETE FROM subjects WHERE id = ? AND user_id = ?').run(id, userId);
 }
 
-function getSubjectQuestionCount(subjectId) {
-    const row = db.prepare('SELECT COUNT(*) as count FROM questions WHERE subject_id = ?').get(subjectId);
+function getSubjectQuestionCount(userId, subjectId) {
+    const row = db.prepare(
+        'SELECT COUNT(*) as count FROM questions WHERE subject_id = ? AND user_id = ?'
+    ).get(subjectId, userId);
     return row.count;
 }
 
 // ─── Questions ───
 
-function getQuestionsBySubject(subjectId) {
+function getQuestionsBySubject(userId, subjectId) {
     const rows = db.prepare(
-        'SELECT * FROM questions WHERE subject_id = ? ORDER BY id'
-    ).all(subjectId);
+        'SELECT * FROM questions WHERE subject_id = ? AND user_id = ? ORDER BY id'
+    ).all(subjectId, userId);
     return rows.map(r => JSON.parse(r.question_json));
 }
 
 /**
  * Get random N questions for a subject. If count is 0, return all.
  */
-function getRandomQuestions(subjectId, count) {
-    if (!count || count <= 0) return getQuestionsBySubject(subjectId);
+function getRandomQuestions(userId, subjectId, count) {
+    if (!count || count <= 0) return getQuestionsBySubject(userId, subjectId);
     const rows = db.prepare(
-        'SELECT * FROM questions WHERE subject_id = ? ORDER BY RANDOM() LIMIT ?'
-    ).all(subjectId, count);
+        'SELECT * FROM questions WHERE subject_id = ? AND user_id = ? ORDER BY RANDOM() LIMIT ?'
+    ).all(subjectId, userId, count);
     return rows.map(r => JSON.parse(r.question_json));
 }
 
 /**
  * Insert questions for a subject
  */
-function insertQuestions(subjectId, quizData, source) {
+function insertQuestions(userId, subjectId, quizData, source) {
     const insert = db.prepare(
-        'INSERT OR REPLACE INTO questions (question_id, question_json, source, domain, type, subject_id) VALUES (?, ?, ?, ?, ?, ?)'
+        'INSERT OR REPLACE INTO questions (question_id, question_json, source, domain, type, subject_id, user_id) VALUES (?, ?, ?, ?, ?, ?, ?)'
     );
     const insertMany = db.transaction((rows) => {
         for (const row of rows) insert.run(...row);
@@ -165,7 +253,8 @@ function insertQuestions(subjectId, quizData, source) {
         source,
         q.domain || '',
         q.type || 'single',
-        subjectId
+        subjectId,
+        userId
     ]);
     insertMany(rows);
     return rows.length;
@@ -222,7 +311,7 @@ function parseErrorsFile(filePath) {
 /**
  * Import wrong questions from inputs/errors-*.txt files into the database.
  */
-function importErrorsFromFiles() {
+function importErrorsFromFiles(userId) {
     const errorFiles = fs.readdirSync(INPUTS_DIR).filter(f => /^errors-\d+\.txt$/.test(f)).sort();
     let totalImported = 0;
 
@@ -238,7 +327,7 @@ function importErrorsFromFiles() {
         }
 
         // Find subject_id for this source
-        const subject = db.prepare('SELECT id FROM subjects WHERE name = ?').get(source);
+        const subject = db.prepare('SELECT id FROM subjects WHERE name = ? AND user_id = ?').get(source, userId);
         const subjectId = subject ? subject.id : null;
 
         const errors = parseErrorsFile(path.join(INPUTS_DIR, file));
@@ -252,13 +341,13 @@ function importErrorsFromFiles() {
             if (question.question !== err.questionText) {
                 const matched = quizData.find(q => q.id === question.id);
                 if (matched) {
-                    upsertWrongQuestion(String(matched.id), JSON.stringify(matched), source, subjectId);
+                    upsertWrongQuestion(userId, String(matched.id), JSON.stringify(matched), source, subjectId);
                     imported++;
                 }
                 continue;
             }
 
-            upsertWrongQuestion(String(question.id), JSON.stringify(question), source, subjectId);
+            upsertWrongQuestion(userId, String(question.id), JSON.stringify(question), source, subjectId);
             imported++;
         }
 
@@ -272,7 +361,7 @@ function importErrorsFromFiles() {
 /**
  * Import all quiz data from inputs/N.js files into the questions table.
  */
-function importAllQuizData() {
+function importAllQuizData(userId) {
     const jsFiles = fs.readdirSync(INPUTS_DIR).filter(f => /^\d+\.js$/.test(f)).sort();
     let totalImported = 0;
     for (const file of jsFiles) {
@@ -283,11 +372,11 @@ function importAllQuizData() {
             continue;
         }
         // Find subject_id for this source
-        const subject = db.prepare('SELECT id FROM subjects WHERE name = ?').get(source);
+        const subject = db.prepare('SELECT id FROM subjects WHERE name = ? AND user_id = ?').get(source, userId);
         const subjectId = subject ? subject.id : null;
 
         const insert = db.prepare(
-            'INSERT OR REPLACE INTO questions (question_id, question_json, source, domain, type, subject_id) VALUES (?, ?, ?, ?, ?, ?)'
+            'INSERT OR REPLACE INTO questions (question_id, question_json, source, domain, type, subject_id, user_id) VALUES (?, ?, ?, ?, ?, ?, ?)'
         );
         const insertMany = db.transaction((rows) => {
             for (const row of rows) insert.run(...row);
@@ -299,7 +388,8 @@ function importAllQuizData() {
             source,
             q.domain || '',
             q.type || 'single',
-            subjectId
+            subjectId,
+            userId
         ]);
         insertMany(rows);
         console.log(`  ${file}: ${rows.length} 道试题已导入`);
@@ -311,7 +401,7 @@ function importAllQuizData() {
 /**
  * Import quiz data from a JSON file into the questions table.
  */
-function importQuizFromJSON(filePath, source, subjectId) {
+function importQuizFromJSON(userId, filePath, source, subjectId) {
     const content = fs.readFileSync(filePath, 'utf-8');
     let quizData;
     try {
@@ -321,18 +411,18 @@ function importQuizFromJSON(filePath, source, subjectId) {
         quizData = new Function('return ' + wrapped)();
     }
     if (!Array.isArray(quizData)) throw new Error('文件内容必须是一个数组');
-    return insertQuestions(subjectId, quizData, source);
+    return insertQuestions(userId, subjectId, quizData, source);
 }
 
 /**
  * Get all available sources with question counts (legacy, now filtered by subject)
  */
-function getSources(subjectId) {
+function getSources(userId, subjectId) {
     const rows = db.prepare(
         subjectId
-            ? 'SELECT source, COUNT(*) as count FROM questions WHERE subject_id = ? GROUP BY source ORDER BY source'
-            : 'SELECT source, COUNT(*) as count FROM questions GROUP BY source ORDER BY source'
-    ).all(subjectId);
+            ? 'SELECT source, COUNT(*) as count FROM questions WHERE subject_id = ? AND user_id = ? GROUP BY source ORDER BY source'
+            : 'SELECT source, COUNT(*) as count FROM questions WHERE user_id = ? GROUP BY source ORDER BY source'
+    ).all(subjectId, userId);
     return rows;
 }
 
@@ -350,10 +440,10 @@ function getDB() {
 
 // ─── Wrong Questions ───
 
-function upsertWrongQuestion(questionId, questionJson, source, subjectId) {
+function upsertWrongQuestion(userId, questionId, questionJson, source, subjectId) {
     const existing = db.prepare(
-        'SELECT id, wrong_count FROM wrong_questions WHERE question_id = ? AND source = ?'
-    ).get(questionId, source);
+        'SELECT id, wrong_count FROM wrong_questions WHERE question_id = ? AND source = ? AND user_id = ?'
+    ).get(questionId, source, userId);
 
     if (existing) {
         db.prepare(
@@ -361,83 +451,85 @@ function upsertWrongQuestion(questionId, questionJson, source, subjectId) {
         ).run(subjectId, existing.id);
     } else {
         db.prepare(
-            'INSERT INTO wrong_questions (question_id, question_json, source, subject_id) VALUES (?, ?, ?, ?)'
-        ).run(questionId, questionJson, source, subjectId);
+            'INSERT INTO wrong_questions (question_id, question_json, source, subject_id, user_id) VALUES (?, ?, ?, ?, ?)'
+        ).run(questionId, questionJson, source, subjectId, userId);
     }
 }
 
-function getWrongQuestionsBySource(source) {
+function getWrongQuestionsBySource(userId, source) {
     return db.prepare(
-        'SELECT * FROM wrong_questions WHERE source = ? ORDER BY created_at DESC'
-    ).all(source);
+        'SELECT * FROM wrong_questions WHERE source = ? AND user_id = ? ORDER BY created_at DESC'
+    ).all(source, userId);
 }
 
-function getWrongQuestionsBySubject(subjectId) {
+function getWrongQuestionsBySubject(userId, subjectId) {
     return db.prepare(
-        'SELECT * FROM wrong_questions WHERE subject_id = ? ORDER BY created_at DESC'
-    ).all(subjectId);
+        'SELECT * FROM wrong_questions WHERE subject_id = ? AND user_id = ? ORDER BY created_at DESC'
+    ).all(subjectId, userId);
 }
 
-function getAllWrongQuestions() {
-    return db.prepare('SELECT * FROM wrong_questions ORDER BY created_at DESC').all();
+function getAllWrongQuestions(userId) {
+    return db.prepare(
+        'SELECT * FROM wrong_questions WHERE user_id = ? ORDER BY created_at DESC'
+    ).all(userId);
 }
 
-function getRandomWrongQuestions(count = 10, subjectId) {
+function getRandomWrongQuestions(userId, count = 10, subjectId) {
     const rows = db.prepare(
         subjectId
-            ? 'SELECT * FROM wrong_questions WHERE subject_id = ? ORDER BY RANDOM() LIMIT ?'
-            : 'SELECT * FROM wrong_questions ORDER BY RANDOM() LIMIT ?'
-    ).all(subjectId, count);
+            ? 'SELECT * FROM wrong_questions WHERE subject_id = ? AND user_id = ? ORDER BY RANDOM() LIMIT ?'
+            : 'SELECT * FROM wrong_questions WHERE user_id = ? ORDER BY RANDOM() LIMIT ?'
+    ).all(subjectId, userId, count);
     return rows.map(row => ({
         ...row,
         question: JSON.parse(row.question_json)
     }));
 }
 
-function markCorrect(id) {
+function markCorrect(userId, id) {
     const row = db.prepare(
-        'SELECT correct_streak FROM wrong_questions WHERE id = ?'
-    ).get(id);
+        'SELECT correct_streak FROM wrong_questions WHERE id = ? AND user_id = ?'
+    ).get(id, userId);
 
     if (!row) return false;
 
     const newStreak = row.correct_streak + 1;
     if (newStreak >= 3) {
-        db.prepare('DELETE FROM wrong_questions WHERE id = ?').run(id);
+        db.prepare('DELETE FROM wrong_questions WHERE id = ? AND user_id = ?').run(id, userId);
         return true;
     }
 
     db.prepare(
-        'UPDATE wrong_questions SET correct_streak = ? WHERE id = ?'
-    ).run(newStreak, id);
+        'UPDATE wrong_questions SET correct_streak = ? WHERE id = ? AND user_id = ?'
+    ).run(newStreak, id, userId);
     return false;
 }
 
-function markWrong(id) {
+function markWrong(userId, id) {
     db.prepare(
-        'UPDATE wrong_questions SET wrong_count = wrong_count + 1, correct_streak = 0 WHERE id = ?'
-    ).run(id);
+        'UPDATE wrong_questions SET wrong_count = wrong_count + 1, correct_streak = 0 WHERE id = ? AND user_id = ?'
+    ).run(id, userId);
 }
 
-function getWrongCount(subjectId) {
+function getWrongCount(userId, subjectId) {
     const row = subjectId
-        ? db.prepare('SELECT COUNT(*) as count FROM wrong_questions WHERE subject_id = ?').get(subjectId)
-        : db.prepare('SELECT COUNT(*) as count FROM wrong_questions').get();
+        ? db.prepare('SELECT COUNT(*) as count FROM wrong_questions WHERE subject_id = ? AND user_id = ?').get(subjectId, userId)
+        : db.prepare('SELECT COUNT(*) as count FROM wrong_questions WHERE user_id = ?').get(userId);
     return row.count;
 }
 
 // ─── Exam History ───
 
-function saveExamHistory(source, total, correct, score, subjectId) {
+function saveExamHistory(userId, source, total, correct, score, subjectId) {
     db.prepare(
-        'INSERT INTO exam_history (source, total, correct, score, subject_id) VALUES (?, ?, ?, ?, ?)'
-    ).run(source, total, correct, score, subjectId);
+        'INSERT INTO exam_history (source, total, correct, score, subject_id, user_id) VALUES (?, ?, ?, ?, ?, ?)'
+    ).run(source, total, correct, score, subjectId, userId);
 }
 
-function getProgress(subjectId) {
+function getProgress(userId, subjectId) {
     const history = subjectId
-        ? db.prepare('SELECT * FROM exam_history WHERE subject_id = ? ORDER BY created_at ASC').all(subjectId)
-        : db.prepare('SELECT * FROM exam_history ORDER BY created_at ASC').all();
+        ? db.prepare('SELECT * FROM exam_history WHERE subject_id = ? AND user_id = ? ORDER BY created_at ASC').all(subjectId, userId)
+        : db.prepare('SELECT * FROM exam_history WHERE user_id = ? ORDER BY created_at ASC').all(userId);
 
     if (history.length === 0) return { history: [], summary: null };
 
@@ -466,10 +558,10 @@ function getProgress(subjectId) {
     };
 }
 
-function getWeakDomains(subjectId) {
+function getWeakDomains(userId, subjectId) {
     const rows = subjectId
-        ? db.prepare('SELECT question_json FROM wrong_questions WHERE subject_id = ?').all(subjectId)
-        : db.prepare('SELECT question_json FROM wrong_questions').all();
+        ? db.prepare('SELECT question_json FROM wrong_questions WHERE subject_id = ? AND user_id = ?').all(subjectId, userId)
+        : db.prepare('SELECT question_json FROM wrong_questions WHERE user_id = ?').all(userId);
 
     const domainMap = {};
     for (const row of rows) {
@@ -481,9 +573,9 @@ function getWeakDomains(subjectId) {
 
     const domainTotals = db.prepare(
         subjectId
-            ? "SELECT domain, COUNT(*) as total FROM questions WHERE domain != '' AND subject_id = ? GROUP BY domain"
-            : "SELECT domain, COUNT(*) as total FROM questions WHERE domain != '' GROUP BY domain"
-    ).all(subjectId);
+            ? "SELECT domain, COUNT(*) as total FROM questions WHERE domain != '' AND subject_id = ? AND user_id = ? GROUP BY domain"
+            : "SELECT domain, COUNT(*) as total FROM questions WHERE domain != '' AND user_id = ? GROUP BY domain"
+    ).all(subjectId, userId);
     const totalMap = {};
     for (const d of domainTotals) {
         totalMap[d.domain] = d.total;
@@ -526,5 +618,11 @@ module.exports = {
     getSubjectById,
     updateSubject,
     deleteSubject,
-    getSubjectQuestionCount
+    getSubjectQuestionCount,
+    // User CRUD
+    createUser,
+    findUserByEmail,
+    findUserByToken,
+    activateUser,
+    getUserById
 };

@@ -158,6 +158,19 @@ textarea.form-input{resize:vertical;min-height:80px;font-family:inherit}
 
 /* Scroll progress */
 .scroll-progress{position:fixed;top:56px;left:0;height:3px;background:var(--primary);z-index:99;transition:width .1s;width:0}
+
+/* Auth */
+.auth-container{max-width:400px;margin:40px auto 0}
+.auth-logo{text-align:center;margin-bottom:32px}
+.auth-logo h2{font-size:24px;font-weight:700;color:var(--primary);margin-bottom:4px}
+.auth-logo p{font-size:14px;color:var(--text2)}
+.auth-link{color:var(--primary);cursor:pointer;font-weight:600}
+.auth-link:hover{text-decoration:underline}
+.auth-error{background:#fce8e6;color:var(--danger);padding:10px 14px;border-radius:8px;font-size:14px;margin-bottom:16px;display:none}
+.auth-success{text-align:center;padding:48px 20px}
+.auth-success-icon{font-size:64px;margin-bottom:16px}
+.auth-success h2{font-size:20px;margin-bottom:8px}
+.auth-success p{font-size:14px;color:var(--text2);line-height:1.6}
 </style>
 </head>
 <body>
@@ -166,6 +179,7 @@ textarea.form-input{resize:vertical;min-height:80px;font-family:inherit}
 <header class="header">
   <button class="header-btn" id="back-btn" onclick="goBack()" style="visibility:hidden">&#8592;</button>
   <h1 id="header-title">题库系统</h1>
+  <button class="header-btn" id="logout-btn" onclick="doLogout()" style="visibility:hidden" title="退出登录">&#9211;</button>
   <button class="header-btn" id="header-action" style="visibility:hidden" onclick="headerAction()">&#8942;</button>
 </header>
 <main class="main" id="app"></main>
@@ -197,8 +211,36 @@ let currentView = 'subjects';
 let viewParams = {};
 let viewHistory = [];
 let confirmCb = null;
+let currentUser = null;
+
+// ─── Auth API ───
+async function apiFetch(url, options = {}) {
+  const res = await fetch(url, options);
+  if (res.status === 401) {
+    currentUser = null;
+    currentView = 'auth-login';
+    viewParams = {};
+    viewHistory = [];
+    render();
+    throw new Error('请先登录');
+  }
+  return res;
+}
+
+async function doLogout() {
+  try {
+    await fetch('/api/auth/logout', { method: 'POST' });
+  } catch {}
+  currentUser = null;
+  currentView = 'auth-login';
+  viewParams = {};
+  viewHistory = [];
+  render();
+}
 
 // ─── Router ───
+const PUBLIC_VIEWS = ['auth-login', 'auth-register', 'auth-activate', 'auth-pending'];
+
 function navigate(view, params = {}, pushHistory = true) {
   if (pushHistory && currentView !== view) {
     viewHistory.push({ view: currentView, params: viewParams });
@@ -228,12 +270,49 @@ function render() {
   const fab = document.getElementById('fab');
   const headerAction = document.getElementById('header-action');
   const headerTitle = document.getElementById('header-title');
+  const logoutBtn = document.getElementById('logout-btn');
 
   // Reset
   fab.style.display = 'none';
   headerAction.style.visibility = 'hidden';
+  logoutBtn.style.visibility = 'hidden';
+
+  // Route guard
+  if (!currentUser && !PUBLIC_VIEWS.includes(currentView)) {
+    currentView = 'auth-login';
+    viewParams = {};
+  }
+  if (currentUser && (currentView === 'auth-login' || currentView === 'auth-register')) {
+    currentView = 'subjects';
+    viewParams = {};
+  }
+
+  // Show logout button when logged in
+  if (currentUser) {
+    logoutBtn.style.visibility = 'visible';
+  }
 
   switch (currentView) {
+    case 'auth-login':
+      backBtn.style.visibility = 'hidden';
+      headerTitle.textContent = '题库系统';
+      renderLogin(app);
+      break;
+    case 'auth-register':
+      backBtn.style.visibility = 'visible';
+      headerTitle.textContent = '注册账号';
+      renderRegister(app);
+      break;
+    case 'auth-activate':
+      backBtn.style.visibility = 'hidden';
+      headerTitle.textContent = '激活账户';
+      renderActivate(app);
+      break;
+    case 'auth-pending':
+      backBtn.style.visibility = 'hidden';
+      headerTitle.textContent = '题库系统';
+      renderPending(app);
+      break;
     case 'subjects':
       backBtn.style.visibility = 'hidden';
       headerTitle.textContent = '题库系统';
@@ -287,12 +366,156 @@ function render() {
   }
 }
 
+// ─── Auth Views ───
+
+function renderLogin(el) {
+  el.innerHTML = `
+    <div class="auth-container">
+      <div class="auth-logo">
+        <h2>题库系统</h2>
+        <p>登录以继续使用</p>
+      </div>
+      <div class="card">
+        <div class="auth-error" id="login-error"></div>
+        <div class="form-group">
+          <label class="form-label">邮箱</label>
+          <input class="form-input" id="inp-email" type="email" placeholder="your@email.com" autocomplete="email">
+        </div>
+        <div class="form-group">
+          <label class="form-label">密码</label>
+          <input class="form-input" id="inp-password" type="password" placeholder="输入密码" autocomplete="current-password">
+        </div>
+        <button class="btn btn-primary btn-block btn-lg" onclick="doLogin()">登录</button>
+      </div>
+      <div style="text-align:center;margin-top:20px;font-size:14px;color:var(--text2)">
+        还没有账号？<span class="auth-link" onclick="navigate('auth-register')">注册</span>
+      </div>
+    </div>`;
+  document.getElementById('inp-email').focus();
+}
+
+function renderRegister(el) {
+  el.innerHTML = `
+    <div class="auth-container">
+      <div class="auth-logo">
+        <h2>注册账号</h2>
+        <p>创建一个新账户</p>
+      </div>
+      <div class="card">
+        <div class="auth-error" id="reg-error"></div>
+        <div class="form-group">
+          <label class="form-label">邮箱</label>
+          <input class="form-input" id="inp-reg-email" type="email" placeholder="your@email.com" autocomplete="email">
+        </div>
+        <div class="form-group">
+          <label class="form-label">密码</label>
+          <input class="form-input" id="inp-reg-password" type="password" placeholder="至少 6 位" autocomplete="new-password">
+        </div>
+        <div class="form-group">
+          <label class="form-label">确认密码</label>
+          <input class="form-input" id="inp-reg-password2" type="password" placeholder="再次输入密码" autocomplete="new-password">
+        </div>
+        <button class="btn btn-primary btn-block btn-lg" onclick="doRegister()">注册</button>
+      </div>
+      <div style="text-align:center;margin-top:20px;font-size:14px;color:var(--text2)">
+        已有账号？<span class="auth-link" onclick="navigate('auth-login')">登录</span>
+      </div>
+    </div>`;
+  document.getElementById('inp-reg-email').focus();
+}
+
+function renderPending(el) {
+  el.innerHTML = `
+    <div class="auth-success">
+      <div class="auth-success-icon">&#9993;</div>
+      <h2>注册成功</h2>
+      <p>我们已向您的邮箱发送了激活链接<br>请查收邮件并点击链接激活账户</p>
+      <div style="margin-top:24px">
+        <button class="btn btn-outline" onclick="navigate('auth-login')">返回登录</button>
+      </div>
+    </div>`;
+}
+
+async function renderActivate(el) {
+  const token = viewParams.token;
+  if (!token) {
+    el.innerHTML = '<div class="auth-success"><div class="auth-success-icon">&#9888;</div><h2>无效链接</h2><p>激活链接无效或已过期</p><div style="margin-top:24px"><button class="btn btn-outline" onclick="navigate(\'auth-login\')">返回登录</button></div></div>';
+    return;
+  }
+  el.innerHTML = '<div class="loading"><div class="spinner"></div><p>正在激活...</p></div>';
+  try {
+    const res = await fetch('/api/auth/activate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token })
+    });
+    const data = await res.json();
+    if (data.success) {
+      el.innerHTML = `<div class="auth-success"><div class="auth-success-icon">&#9989;</div><h2>${esc(data.message)}</h2><p>请使用邮箱和密码登录</p><div style="margin-top:24px"><button class="btn btn-primary" onclick="navigate('auth-login')">去登录</button></div></div>`;
+    } else {
+      el.innerHTML = `<div class="auth-success"><div class="auth-success-icon">&#9888;</div><h2>激活失败</h2><p>${esc(data.error)}</p><div style="margin-top:24px"><button class="btn btn-outline" onclick="navigate('auth-login')">返回登录</button></div></div>`;
+    }
+  } catch (e) {
+    el.innerHTML = '<div class="auth-success"><div class="auth-success-icon">&#9888;</div><h2>激活失败</h2><p>网络错误，请稍后重试</p><div style="margin-top:24px"><button class="btn btn-outline" onclick="navigate(\'auth-login\')">返回登录</button></div></div>';
+  }
+}
+
+async function doLogin() {
+  const email = document.getElementById('inp-email').value.trim();
+  const password = document.getElementById('inp-password').value;
+  const errEl = document.getElementById('login-error');
+  errEl.style.display = 'none';
+
+  if (!email || !password) { errEl.textContent = '请输入邮箱和密码'; errEl.style.display = 'block'; return; }
+
+  try {
+    const res = await fetch('/api/auth/login', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password })
+    });
+    const data = await res.json();
+    if (!res.ok) { errEl.textContent = data.error; errEl.style.display = 'block'; return; }
+    currentUser = data.user;
+    currentView = 'subjects';
+    viewParams = {};
+    viewHistory = [];
+    render();
+  } catch (e) {
+    errEl.textContent = '网络错误，请稍后重试';
+    errEl.style.display = 'block';
+  }
+}
+
+async function doRegister() {
+  const email = document.getElementById('inp-reg-email').value.trim();
+  const password = document.getElementById('inp-reg-password').value;
+  const password2 = document.getElementById('inp-reg-password2').value;
+  const errEl = document.getElementById('reg-error');
+  errEl.style.display = 'none';
+
+  if (!email || !password) { errEl.textContent = '请输入邮箱和密码'; errEl.style.display = 'block'; return; }
+  if (password !== password2) { errEl.textContent = '两次密码输入不一致'; errEl.style.display = 'block'; return; }
+  if (password.length < 6) { errEl.textContent = '密码长度至少 6 位'; errEl.style.display = 'block'; return; }
+
+  try {
+    const res = await fetch('/api/auth/register', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password })
+    });
+    const data = await res.json();
+    if (!res.ok) { errEl.textContent = data.error; errEl.style.display = 'block'; return; }
+    navigate('auth-pending');
+  } catch (e) {
+    errEl.textContent = '网络错误，请稍后重试';
+    errEl.style.display = 'block';
+  }
+}
+
 // ─── Views ───
 
 async function renderSubjects(el) {
   el.innerHTML = '<div class="loading"><div class="spinner"></div><p>加载中...</p></div>';
   try {
-    const res = await fetch('/api/subjects');
+    const res = await apiFetch('/api/subjects');
     const subjects = await res.json();
 
     if (subjects.length === 0) {
@@ -373,7 +596,7 @@ async function renderDashboard(el) {
   const { subjectId } = viewParams;
   el.innerHTML = '<div class="loading"><div class="spinner"></div><p>加载中...</p></div>';
   try {
-    const res = await fetch(`/api/subject/${subjectId}`);
+    const res = await apiFetch(`/api/subject/${subjectId}`);
     const s = await res.json();
     viewParams.subject = s;
 
@@ -424,7 +647,7 @@ async function renderDashboard(el) {
 async function renderProgress(el) {
   el.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
   try {
-    const res = await fetch(`/api/progress/${viewParams.subjectId}`);
+    const res = await apiFetch(`/api/progress/${viewParams.subjectId}`);
     const data = await res.json();
     if (!data.summary) {
       el.innerHTML = '<div class="empty"><div class="empty-icon">&#128203;</div><div class="empty-text">还没有考试记录<br>快去做一套题吧</div></div>';
@@ -461,7 +684,7 @@ async function renderProgress(el) {
 async function renderWeakness(el) {
   el.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
   try {
-    const res = await fetch(`/api/weakness/${viewParams.subjectId}`);
+    const res = await apiFetch(`/api/weakness/${viewParams.subjectId}`);
     const domains = await res.json();
     if (domains.length === 0) {
       el.innerHTML = '<div class="empty"><div class="empty-icon">&#128170;</div><div class="empty-text">没有错题记录<br>薄弱领域分析需要错题数据</div></div>';
@@ -511,7 +734,7 @@ async function startExam(subjectId, subjectName, quizCount) {
     const url = quizCount > 0
       ? `/api/quiz/${subjectId}?random=${quizCount}`
       : `/api/quiz/${subjectId}`;
-    const res = await fetch(url);
+    const res = await apiFetch(url);
     if (!res.ok) {
       toast('该学科暂无题目');
       goBack();
@@ -536,7 +759,7 @@ async function startReview(subjectId) {
   app.innerHTML = '<div class="loading"><div class="spinner"></div><p>加载错题...</p></div>';
 
   try {
-    const res = await fetch(`/api/review?subjectId=${subjectId}&count=10`);
+    const res = await apiFetch(`/api/review?subjectId=${subjectId}&count=10`);
     const data = await res.json();
     if (data.length === 0) {
       toast('没有错题需要复习');
@@ -683,7 +906,7 @@ async function submitQuiz() {
   // Submit to server
   if (isReviewMode) {
     try {
-      const r = await fetch('/api/review/submit', {
+      const r = await apiFetch('/api/review/submit', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ results: reviewResults })
       });
@@ -692,7 +915,7 @@ async function submitQuiz() {
     } catch {}
   } else {
     try {
-      await fetch('/api/submit', {
+      await apiFetch('/api/submit', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           source: viewParams.source || 'all',
@@ -743,7 +966,7 @@ async function doCreateSubject() {
   if (!name) { toast('请输入学科名称'); return; }
 
   try {
-    const res = await fetch('/api/subjects', {
+    const res = await apiFetch('/api/subjects', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, description: desc })
     });
@@ -762,7 +985,7 @@ async function doUpdateSubject() {
   if (!name) { toast('名称不能为空'); return; }
 
   try {
-    const res = await fetch(`/api/subjects/${viewParams.subjectId}`, {
+    const res = await apiFetch(`/api/subjects/${viewParams.subjectId}`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, description: desc, quizCount })
     });
@@ -781,7 +1004,7 @@ function doDeleteSubject() {
   const name = viewParams.subject?.name || '';
   showConfirm(`确定删除学科「${name}」？所有题目、错题和记录将一并删除。`, async () => {
     try {
-      await fetch(`/api/subjects/${viewParams.subjectId}`, { method: 'DELETE' });
+      await apiFetch(`/api/subjects/${viewParams.subjectId}`, { method: 'DELETE' });
       toast('已删除');
       viewHistory = [];
       navigate('subjects');
@@ -798,7 +1021,7 @@ async function doAIGen() {
   btn.textContent = '生成中，请稍候...';
 
   try {
-    const res = await fetch('/api/aigen', {
+    const res = await apiFetch('/api/aigen', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ subjectId: viewParams.subjectId, questionCount: count })
     });
@@ -868,7 +1091,25 @@ window.addEventListener('scroll', () => {
 });
 
 // ─── Init ───
-render();
+(async function init() {
+  // Check for activation token in URL
+  const urlParams = new URLSearchParams(window.location.search);
+  if (urlParams.has('token')) {
+    navigate('auth-activate', { token: urlParams.get('token') }, false);
+    // Clean URL
+    window.history.replaceState({}, '', '/activate');
+    return;
+  }
+
+  // Check auth state
+  try {
+    const res = await fetch('/api/auth/me');
+    const data = await res.json();
+    currentUser = data.user;
+  } catch {}
+
+  render();
+})();
 </script>
 </body>
 </html>
