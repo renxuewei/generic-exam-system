@@ -19,16 +19,18 @@ if (fs.existsSync(envPath)) {
         }
     });
 }
+const dbModule = require('./db');
 const {
-    initialize, getQuestionsBySubject, getRandomQuestions, getSources, insertQuestions,
+    createDbClient, initialize, getClient, getDB,
+    getQuestionsBySubject, getRandomQuestions, getSources, insertQuestions,
     importQuizFromJSON, upsertWrongQuestion, getRandomWrongQuestions,
     markCorrect, markWrong, getWrongCount, saveExamHistory, getProgress,
     getWeakDomains, createSubject, getSubjects, getSubjectById,
-    updateSubject, deleteSubject, getSubjectQuestionCount, getDB,
+    updateSubject, deleteSubject, getSubjectQuestionCount,
     createUser, findUserByEmail, findUserByToken, activateUser, getUserById,
     getAllUsers, setUserDisabled, getUserSubjects,
     exportUserData, restoreUserData
-} = require('./db');
+} = dbModule;
 const { sendActivationEmail } = require('./email');
 const { generateQuiz } = require('./ai-gen');
 const { exec } = require('child_process');
@@ -37,49 +39,43 @@ const AdmZip = require('adm-zip');
 const multer = require('multer');
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
-// ─── SQLite Session Store ───
-class SqliteSessionStore extends session.Store {
-    constructor(db) {
+// ─── Create DB client synchronously ───
+createDbClient();
+
+// ─── libSQL Session Store ───
+class LibsqlSessionStore extends session.Store {
+    constructor(dbClient) {
         super();
-        this.db = db;
+        this.db = dbClient;
         // Periodically clean expired sessions
         this._cleanup = setInterval(() => {
-            try {
-                this.db.prepare('DELETE FROM sessions WHERE expired < ?').run(Date.now());
-            } catch {}
+            this.db.execute('DELETE FROM sessions WHERE expired < ?', [Date.now()]).catch(() => {});
         }, 10 * 60 * 1000); // every 10 min
     }
 
     get(sid, callback) {
-        try {
-            const row = this.db.prepare('SELECT sess FROM sessions WHERE sid = ? AND expired > ?').get(sid, Date.now());
-            if (!row) return callback(null, null);
-            callback(null, JSON.parse(row.sess));
-        } catch (err) {
-            callback(err);
-        }
+        this.db.execute(
+            'SELECT sess FROM sessions WHERE sid = ? AND expired > ?',
+            [sid, Date.now()]
+        ).then(result => {
+            if (!result.rows.length) return callback(null, null);
+            callback(null, JSON.parse(result.rows[0].sess));
+        }).catch(callback);
     }
 
     set(sid, sess, callback) {
-        try {
-            const maxAge = (sess.cookie && sess.cookie.maxAge) || 30 * 24 * 60 * 60 * 1000;
-            const expired = Date.now() + maxAge;
-            this.db.prepare(
-                'INSERT OR REPLACE INTO sessions (sid, expired, sess) VALUES (?, ?, ?)'
-            ).run(sid, expired, JSON.stringify(sess));
-            callback(null);
-        } catch (err) {
-            callback(err);
-        }
+        const maxAge = (sess.cookie && sess.cookie.maxAge) || 30 * 24 * 60 * 60 * 1000;
+        const expired = Date.now() + maxAge;
+        this.db.execute(
+            'INSERT OR REPLACE INTO sessions (sid, expired, sess) VALUES (?, ?, ?)',
+            [sid, expired, JSON.stringify(sess)]
+        ).then(() => callback(null)).catch(callback);
     }
 
     destroy(sid, callback) {
-        try {
-            this.db.prepare('DELETE FROM sessions WHERE sid = ?').run(sid);
-            callback(null);
-        } catch (err) {
-            callback(err);
-        }
+        this.db.execute(
+            'DELETE FROM sessions WHERE sid = ?', [sid]
+        ).then(() => callback(null)).catch(callback);
     }
 }
 
@@ -95,9 +91,20 @@ let serverInstance = null;
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Initialize DB and session middleware before any routes
-initialize();
-const _sessionStore = new SqliteSessionStore(getDB());
+// ─── DB init middleware: wait for tables to be created ───
+let _initPromise = initialize();
+
+app.use(async (req, res, next) => {
+    try {
+        await _initPromise;
+    } catch (err) {
+        return res.status(500).json({ error: '数据库初始化失败: ' + err.message });
+    }
+    next();
+});
+
+// ─── Session middleware ───
+const _sessionStore = new LibsqlSessionStore(getClient());
 app.use(session({
     secret: process.env.SESSION_SECRET || 'dev-secret-change-me',
     resave: false,
@@ -142,7 +149,7 @@ app.post('/api/auth/register', async (req, res) => {
     }
 
     // Check duplicate
-    const existing = findUserByEmail(email.toLowerCase().trim());
+    const existing = await findUserByEmail(email.toLowerCase().trim());
     if (existing) {
         return res.status(400).json({ error: '该邮箱已注册' });
     }
@@ -151,7 +158,7 @@ app.post('/api/auth/register', async (req, res) => {
         const hash = await bcrypt.hash(password, 12);
         const token = crypto.randomBytes(32).toString('hex');
         const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-        const userId = createUser(email.toLowerCase().trim(), hash, token, expiresAt);
+        const userId = await createUser(email.toLowerCase().trim(), hash, token, expiresAt);
 
         // Send activation email
         await sendActivationEmail(email.toLowerCase().trim(), token);
@@ -162,13 +169,13 @@ app.post('/api/auth/register', async (req, res) => {
     }
 });
 
-app.post('/api/auth/activate', (req, res) => {
+app.post('/api/auth/activate', async (req, res) => {
     const { token } = req.body;
     if (!token) {
         return res.status(400).json({ error: '缺少激活令牌' });
     }
 
-    const user = findUserByToken(token);
+    const user = await findUserByToken(token);
     if (!user) {
         return res.status(400).json({ error: '无效的激活链接' });
     }
@@ -181,7 +188,7 @@ app.post('/api/auth/activate', (req, res) => {
         return res.status(400).json({ error: '激活链接已过期，请重新注册' });
     }
 
-    activateUser(user.id);
+    await activateUser(user.id);
     res.json({ success: true, message: '账户激活成功！请登录' });
 });
 
@@ -191,7 +198,7 @@ app.post('/api/auth/login', async (req, res) => {
         return res.status(400).json({ error: '请输入邮箱和密码' });
     }
 
-    const user = findUserByEmail(email.toLowerCase().trim());
+    const user = await findUserByEmail(email.toLowerCase().trim());
     if (!user) {
         return res.status(401).json({ error: '邮箱或密码错误' });
     }
@@ -220,11 +227,11 @@ app.post('/api/auth/logout', (req, res) => {
     });
 });
 
-app.get('/api/auth/me', (req, res) => {
+app.get('/api/auth/me', async (req, res) => {
     if (!req.session.userId) {
         return res.json({ user: null });
     }
-    const user = getUserById(req.session.userId);
+    const user = await getUserById(req.session.userId);
     res.json({ user: user || null });
 });
 
@@ -253,28 +260,29 @@ function requireAdmin(req, res, next) {
 
 // ─── Admin Routes (before global requireAuth) ───
 
-app.get('/api/admin/users', requireAdmin, (req, res) => {
-    res.json(getAllUsers());
+app.get('/api/admin/users', requireAdmin, async (req, res) => {
+    res.json(await getAllUsers());
 });
 
-app.put('/api/admin/users/:id/toggle', requireAdmin, (req, res) => {
+app.put('/api/admin/users/:id/toggle', requireAdmin, async (req, res) => {
     const userId = parseInt(req.params.id);
     if (userId === 1) return res.status(400).json({ error: '不能操作系统账户' });
-    const users = getAllUsers();
+    const users = await getAllUsers();
     const user = users.find(u => u.id === userId);
     if (!user) return res.status(404).json({ error: '用户不存在' });
-    setUserDisabled(userId, !user.is_disabled);
+    await setUserDisabled(userId, !user.is_disabled);
     res.json({ success: true, is_disabled: !user.is_disabled });
 });
 
-app.get('/api/admin/users/:id/subjects', requireAdmin, (req, res) => {
+app.get('/api/admin/users/:id/subjects', requireAdmin, async (req, res) => {
     const userId = parseInt(req.params.id);
     try {
-        const subjects = getUserSubjects(userId);
-        const enriched = subjects.map(s => {
-            const progress = getProgress(userId, s.id);
-            return { ...s, progress: progress.summary || null };
-        });
+        const subjects = await getUserSubjects(userId);
+        const enriched = [];
+        for (const s of subjects) {
+            const progress = await getProgress(userId, s.id);
+            enriched.push({ ...s, progress: progress.summary || null });
+        }
         res.json(enriched);
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -286,93 +294,94 @@ app.use('/api', requireAuth);
 
 // ─── Subject APIs ───
 
-app.get('/api/subjects', (req, res) => {
-    const subjects = getSubjects(req.userId);
-    const result = subjects.map(s => ({
-        ...s,
-        questionCount: getSubjectQuestionCount(req.userId, s.id),
-        wrongCount: getWrongCount(req.userId, s.id)
-    }));
+app.get('/api/subjects', async (req, res) => {
+    const subjects = await getSubjects(req.userId);
+    const result = [];
+    for (const s of subjects) {
+        const questionCount = await getSubjectQuestionCount(req.userId, s.id);
+        const wrongCount = await getWrongCount(req.userId, s.id);
+        result.push({ ...s, questionCount, wrongCount });
+    }
     res.json(result);
 });
 
-app.get('/api/subject/:id', (req, res) => {
-    const subject = getSubjectById(req.userId, parseInt(req.params.id));
+app.get('/api/subject/:id', async (req, res) => {
+    const subject = await getSubjectById(req.userId, parseInt(req.params.id));
     if (!subject) return res.status(404).json({ error: '学科不存在' });
-    const questionCount = getSubjectQuestionCount(req.userId, subject.id);
-    const wrongCount = getWrongCount(req.userId, subject.id);
+    const questionCount = await getSubjectQuestionCount(req.userId, subject.id);
+    const wrongCount = await getWrongCount(req.userId, subject.id);
     res.json({ ...subject, questionCount, wrongCount });
 });
 
-app.post('/api/subjects', (req, res) => {
+app.post('/api/subjects', async (req, res) => {
     const { name, description } = req.body;
     if (!name || !name.trim()) return res.status(400).json({ error: '学科名称不能为空' });
     try {
-        const id = createSubject(req.userId, name.trim(), description || '');
+        const id = await createSubject(req.userId, name.trim(), description || '');
         res.json({ id, name: name.trim() });
     } catch (err) {
         res.status(400).json({ error: err.message });
     }
 });
 
-app.put('/api/subjects/:id', (req, res) => {
+app.put('/api/subjects/:id', async (req, res) => {
     const { name, description, quizCount } = req.body;
     try {
-        updateSubject(req.userId, parseInt(req.params.id), name, description, quizCount !== undefined ? parseInt(quizCount) : undefined);
+        await updateSubject(req.userId, parseInt(req.params.id), name, description, quizCount !== undefined ? parseInt(quizCount) : undefined);
         res.json({ success: true });
     } catch (err) {
         res.status(400).json({ error: err.message });
     }
 });
 
-app.delete('/api/subjects/:id', (req, res) => {
-    deleteSubject(req.userId, parseInt(req.params.id));
+app.delete('/api/subjects/:id', async (req, res) => {
+    await deleteSubject(req.userId, parseInt(req.params.id));
     res.json({ success: true });
 });
 
 // ─── Quiz APIs ───
 
-app.get('/api/quiz/:subjectId', (req, res) => {
+app.get('/api/quiz/:subjectId', async (req, res) => {
     const subjectId = parseInt(req.params.subjectId);
     const count = req.query.random ? parseInt(req.query.random) : 0;
-    const data = count > 0 ? getRandomQuestions(req.userId, subjectId, count) : getQuestionsBySubject(req.userId, subjectId);
+    const data = count > 0 ? await getRandomQuestions(req.userId, subjectId, count) : await getQuestionsBySubject(req.userId, subjectId);
     if (!data || data.length === 0) {
         return res.status(404).json({ error: '该学科暂无题目' });
     }
     res.json(data);
 });
 
-app.get('/api/sources/:subjectId', (req, res) => {
-    const sources = getSources(req.userId, req.params.subjectId);
+app.get('/api/sources/:subjectId', async (req, res) => {
+    const sources = await getSources(req.userId, req.params.subjectId);
     res.json(sources);
 });
 
-app.post('/api/submit', (req, res) => {
+app.post('/api/submit', async (req, res) => {
     const { source, wrongQuestions, totalQuestions, correctCount, score, subjectId } = req.body;
     for (const q of wrongQuestions) {
-        upsertWrongQuestion(req.userId, String(q.id), JSON.stringify(q), source, subjectId);
+        await upsertWrongQuestion(req.userId, String(q.id), JSON.stringify(q), source, subjectId);
     }
-    saveExamHistory(req.userId, source, totalQuestions, correctCount, score, subjectId);
+    await saveExamHistory(req.userId, source, totalQuestions, correctCount, score, subjectId);
     res.json({ saved: wrongQuestions.length });
 });
 
 // ─── Review APIs ───
 
-app.get('/api/review', (req, res) => {
+app.get('/api/review', async (req, res) => {
     const subjectId = req.query.subjectId ? parseInt(req.query.subjectId) : null;
     const count = req.query.count ? parseInt(req.query.count) : 10;
-    const questions = getRandomWrongQuestions(req.userId, count, subjectId);
+    const questions = await getRandomWrongQuestions(req.userId, count, subjectId);
     res.json(questions);
 });
 
-app.post('/api/review/submit', (req, res) => {
+app.post('/api/review/submit', async (req, res) => {
     const { results } = req.body;
     let mastered = 0;
     for (const r of results) {
         if (r.isCorrect) {
-            if (markCorrect(req.userId, r.id)) mastered++;
+            if (await markCorrect(req.userId, r.id)) mastered++;
         } else {
-            markWrong(req.userId, r.id);
+            await markWrong(req.userId, r.id);
         }
     }
     res.json({ mastered });
@@ -380,13 +389,13 @@ app.post('/api/review/submit', (req, res) => {
 
 // ─── Analytics APIs ───
 
-app.get('/api/progress/:subjectId', (req, res) => {
-    const data = getProgress(req.userId, parseInt(req.params.subjectId));
+app.get('/api/progress/:subjectId', async (req, res) => {
+    const data = await getProgress(req.userId, parseInt(req.params.subjectId));
     res.json(data);
 });
 
-app.get('/api/weakness/:subjectId', (req, res) => {
-    const data = getWeakDomains(req.userId, parseInt(req.params.subjectId));
+app.get('/api/weakness/:subjectId', async (req, res) => {
+    const data = await getWeakDomains(req.userId, parseInt(req.params.subjectId));
     res.json(data);
 });
 
@@ -394,7 +403,7 @@ app.get('/api/weakness/:subjectId', (req, res) => {
 
 app.post('/api/aigen', async (req, res) => {
     const { subjectId, questionCount } = req.body;
-    const subject = getSubjectById(req.userId, subjectId);
+    const subject = await getSubjectById(req.userId, subjectId);
     if (!subject) return res.status(404).json({ error: '学科不存在' });
 
     const envPath = path.join(__dirname, '.env');
@@ -407,7 +416,7 @@ app.post('/api/aigen', async (req, res) => {
         const quizData = await generateQuiz(subject.name, subject.description || '无特殊说明', count);
 
         const source = String(Date.now()).slice(-6);
-        insertQuestions(req.userId, subjectId, quizData, source);
+        await insertQuestions(req.userId, subjectId, quizData, source);
 
         const inputsDir = path.join(__dirname, 'inputs');
         if (!fs.existsSync(inputsDir)) fs.mkdirSync(inputsDir);
@@ -421,9 +430,9 @@ app.post('/api/aigen', async (req, res) => {
 
 // ─── Backup / Restore APIs ───
 
-app.get('/api/backup/export', (req, res) => {
+app.get('/api/backup/export', async (req, res) => {
     try {
-        const data = exportUserData(req.userId);
+        const data = await exportUserData(req.userId);
         res.setHeader('Content-Type', 'application/zip');
         res.setHeader('Content-Disposition', 'attachment; filename=quiz-backup-' + new Date().toISOString().slice(0, 10) + '.zip');
         const archive = archiver('zip', { zlib: { level: 9 } });
@@ -443,7 +452,7 @@ app.get('/api/backup/export', (req, res) => {
     }
 });
 
-app.post('/api/backup/restore', upload.single('file'), (req, res) => {
+app.post('/api/backup/restore', upload.single('file'), async (req, res) => {
     if (!req.file) return res.status(400).json({ error: '请选择备份文件' });
     try {
         const zip = new AdmZip(req.file.buffer);
@@ -456,7 +465,7 @@ app.post('/api/backup/restore', upload.single('file'), (req, res) => {
         const questions = fileNames.includes('questions.json') ? JSON.parse(zip.readAsText('questions.json')) : [];
         const wrongQuestions = fileNames.includes('wrong_questions.json') ? JSON.parse(zip.readAsText('wrong_questions.json')) : [];
         const examHistory = fileNames.includes('exam_history.json') ? JSON.parse(zip.readAsText('exam_history.json')) : [];
-        const result = restoreUserData(req.userId, { manifest, subjects, questions, wrong_questions: wrongQuestions, exam_history: examHistory });
+        const result = await restoreUserData(req.userId, { manifest, subjects, questions, wrong_questions: wrongQuestions, exam_history: examHistory });
         res.json({ success: true, ...result });
     } catch (err) {
         res.status(400).json({ error: '恢复失败: ' + err.message });
@@ -475,13 +484,14 @@ function startServer() {
 
 async function subjectMenu(inquirer) {
     while (true) {
-        const subjects = getSubjects(1); // CLI uses migrated user
-        const choices = subjects.map(s => {
-            const count = getSubjectQuestionCount(1, s.id);
-            const wrongCount = getWrongCount(1, s.id);
+        const subjects = await getSubjects(1); // CLI uses migrated user
+        const choices = [];
+        for (const s of subjects) {
+            const count = await getSubjectQuestionCount(1, s.id);
+            const wrongCount = await getWrongCount(1, s.id);
             const suffix = wrongCount > 0 ? ` (${count}题, ${wrongCount}错题)` : ` (${count}题)`;
-            return { name: `${s.name}${suffix}`, value: s.id };
-        });
+            choices.push({ name: `${s.name}${suffix}`, value: s.id });
+        }
 
         choices.push(
             new inquirer.Separator(),
@@ -508,7 +518,7 @@ async function subjectMenu(inquirer) {
                 { type: 'input', name: 'description', message: '学科描述（可选）：', default: '' }
             ]);
             try {
-                createSubject(1, name.trim(), description.trim());
+                await createSubject(1, name.trim(), description.trim());
                 console.log(`\n学科「${name.trim()}」创建成功！\n`);
             } catch (err) {
                 console.log(`\n创建失败: ${err.message}\n`);
@@ -517,9 +527,9 @@ async function subjectMenu(inquirer) {
         }
 
         // Subject operations - only import is CLI-only
-        const subject = getSubjectById(1, action);
-        const wrongCount = getWrongCount(1, action);
-        const questionCount = getSubjectQuestionCount(1, action);
+        const subject = await getSubjectById(1, action);
+        const wrongCount = await getWrongCount(1, action);
+        const questionCount = await getSubjectQuestionCount(1, action);
 
         const opChoices = [
             { name: '导入试题 (JSON 文件)', value: 'import' },
@@ -546,7 +556,7 @@ async function subjectMenu(inquirer) {
                 { type: 'input', name: 'source', message: '题集标识：', default: baseName }
             ]);
             try {
-                const count = importQuizFromJSON(1, resolved, source, action);
+                const count = await importQuizFromJSON(1, resolved, source, action);
                 console.log(`成功导入 ${count} 道试题！`);
             } catch (err) {
                 console.log(`导入失败: ${err.message}`);
@@ -556,7 +566,8 @@ async function subjectMenu(inquirer) {
 }
 
 async function main() {
-    // 初始化数据库（已在上面的模块顶层完成，这里仅做日志输出）
+    // Wait for DB initialization
+    await _initPromise;
     console.log('数据库初始化成功');
 
     // Vercel 环境中导出 app，不启动 server
@@ -575,6 +586,11 @@ async function main() {
         console.log('再见！');
         process.exit(0);
     }
+}
+
+// Export for Vercel (before async main completes)
+if (process.env.VERCEL) {
+    module.exports = app;
 }
 
 main().catch(err => {
