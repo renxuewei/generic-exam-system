@@ -1,0 +1,14 @@
+{
+  "name": "generic-exam-sys",
+  "version": "2.0.0",
+  "description": "通用题库系统 - 支持多学科管理和考试",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.7.0",
+    "express": "^4.21.0",
+    "inquirer": "^9.3.0"
+  }
+}

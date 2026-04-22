@@ -1,0 +1,874 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>题库系统</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --primary:#4361ee;--primary-light:#eef1ff;--primary-dark:#3651d4;
+  --bg:#f0f2f5;--card:#fff;--text:#1a1a2e;--text2:#636e72;--border:#e0e0e0;
+  --success:#00b894;--danger:#d63031;--warning:#fdcb6e;
+}
+html{height:100%}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;background:var(--bg);color:var(--text);min-height:100%;padding-bottom:env(safe-area-inset-bottom)}
+
+/* Header */
+.header{position:sticky;top:0;z-index:100;background:var(--primary);color:#fff;padding:0 16px;height:56px;display:flex;align-items:center;gap:12px;box-shadow:0 2px 8px rgba(0,0,0,.15)}
+.header h1{font-size:17px;font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.header-btn{background:none;border:none;color:#fff;font-size:22px;cursor:pointer;padding:8px;min-width:40px;min-height:40px;display:flex;align-items:center;justify-content:center;border-radius:8px}
+.header-btn:active{background:rgba(255,255,255,.2)}
+
+/* Main */
+.main{max-width:640px;margin:0 auto;padding:12px 16px 100px}
+
+/* Cards */
+.card{background:var(--card);border-radius:12px;padding:16px;margin-bottom:12px;box-shadow:0 1px 4px rgba(0,0,0,.06)}
+.card-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.card-title{font-size:16px;font-weight:600}
+.card-sub{font-size:13px;color:var(--text2);margin-top:4px}
+
+/* Buttons */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:12px 20px;border-radius:10px;border:none;font-size:15px;font-weight:600;cursor:pointer;transition:all .15s;min-height:48px;-webkit-tap-highlight-color:transparent}
+.btn:active{transform:scale(.97);opacity:.85}
+.btn-primary{background:var(--primary);color:#fff}
+.btn-success{background:var(--success);color:#fff}
+.btn-danger{background:var(--danger);color:#fff}
+.btn-outline{background:transparent;color:var(--primary);border:2px solid var(--primary)}
+.btn-block{width:100%}
+.btn-sm{padding:8px 14px;font-size:13px;min-height:36px;border-radius:8px}
+.btn-lg{padding:16px 24px;font-size:17px;border-radius:12px}
+.btn:disabled{opacity:.4;pointer-events:none}
+
+/* Action Grid */
+.action-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.action-item{background:var(--primary-light);border-radius:12px;padding:16px 12px;text-align:center;cursor:pointer;transition:all .15s;-webkit-tap-highlight-color:transparent;border:2px solid transparent}
+.action-item:active{transform:scale(.96);border-color:var(--primary)}
+.action-item.disabled{opacity:.35;pointer-events:none}
+.action-icon{font-size:28px;margin-bottom:6px}
+.action-label{font-size:14px;font-weight:600;color:var(--text)}
+.action-badge{display:inline-block;background:var(--danger);color:#fff;font-size:11px;font-weight:700;padding:2px 7px;border-radius:10px;margin-left:4px;vertical-align:middle}
+
+/* Subject List */
+.subject-item{display:flex;align-items:center;gap:14px;padding:14px 16px;background:var(--card);border-radius:12px;margin-bottom:10px;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.06);transition:all .15s;-webkit-tap-highlight-color:transparent}
+.subject-item:active{transform:scale(.98);box-shadow:0 2px 8px rgba(0,0,0,.12)}
+.subject-info{flex:1;min-width:0}
+.subject-name{font-size:16px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.subject-desc{font-size:13px;color:var(--text2);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.subject-stats{display:flex;gap:12px;margin-top:4px}
+.subject-stat{font-size:12px;color:var(--text2)}
+.subject-stat strong{color:var(--text)}
+.subject-arrow{color:var(--text2);font-size:18px}
+
+/* Floating Action Button */
+.fab{position:fixed;bottom:24px;right:24px;width:56px;height:56px;border-radius:50%;background:var(--primary);color:#fff;border:none;font-size:28px;cursor:pointer;box-shadow:0 4px 12px rgba(67,97,238,.4);display:flex;align-items:center;justify-content:center;z-index:90;-webkit-tap-highlight-color:transparent}
+.fab:active{transform:scale(.9)}
+
+/* Form */
+.form-group{margin-bottom:16px}
+.form-label{display:block;font-size:14px;font-weight:600;margin-bottom:6px;color:var(--text)}
+.form-input{width:100%;padding:12px 14px;border:2px solid var(--border);border-radius:10px;font-size:15px;transition:border-color .2s;min-height:48px;-webkit-appearance:none}
+.form-input:focus{outline:none;border-color:var(--primary)}
+textarea.form-input{resize:vertical;min-height:80px;font-family:inherit}
+
+/* Quiz */
+.q-card{background:var(--card);border-radius:12px;padding:16px;margin-bottom:12px;box-shadow:0 1px 4px rgba(0,0,0,.06);border-left:4px solid var(--primary)}
+.q-card.correct{border-left-color:var(--success)}
+.q-card.wrong{border-left-color:var(--danger)}
+.q-num{font-size:13px;font-weight:700;color:var(--primary);margin-bottom:6px}
+.q-type{font-size:11px;background:var(--primary-light);color:var(--primary);padding:2px 8px;border-radius:4px;font-weight:600}
+.q-text{font-size:15px;line-height:1.6;margin-bottom:12px}
+.q-streak{font-size:12px;color:var(--success);margin-left:8px}
+.opt-item{display:flex;align-items:flex-start;gap:10px;padding:12px;margin-bottom:6px;border-radius:10px;background:var(--bg);cursor:pointer;transition:all .15s;-webkit-tap-highlight-color:transparent;min-height:48px}
+.opt-item:active{background:var(--primary-light)}
+.opt-item.selected{background:var(--primary-light);border:2px solid var(--primary)}
+.opt-item.correct-answer{background:#e6f4ea;border:2px solid var(--success)}
+.opt-item.wrong-answer{background:#fce8e6;border:2px solid var(--danger)}
+.opt-radio{flex-shrink:0;width:20px;height:20px;border-radius:50%;border:2px solid var(--border);margin-top:2px;display:flex;align-items:center;justify-content:center;transition:all .15s}
+.opt-radio.checked{border-color:var(--primary);background:var(--primary)}
+.opt-radio.checked::after{content:'';width:8px;height:8px;border-radius:50%;background:#fff}
+.opt-checkbox{flex-shrink:0;width:20px;height:20px;border-radius:5px;border:2px solid var(--border);margin-top:2px;display:flex;align-items:center;justify-content:center;transition:all .15s}
+.opt-checkbox.checked{border-color:var(--primary);background:var(--primary)}
+.opt-checkbox.checked::after{content:'\2713';color:#fff;font-size:14px;font-weight:700}
+.opt-text{font-size:14px;line-height:1.5;flex:1;padding-top:1px}
+.opt-key{font-weight:700;color:var(--primary);margin-right:4px}
+
+.q-explanation{display:none;margin-top:12px;padding:12px;background:#fffbe6;border-left:3px solid var(--warning);border-radius:0 8px 8px 0;font-size:13px;line-height:1.6;color:#555}
+
+/* Result Panel */
+.result-panel{background:var(--card);border-radius:16px;padding:24px;text-align:center;margin-bottom:16px;box-shadow:0 2px 12px rgba(0,0,0,.08)}
+.result-score{font-size:48px;font-weight:800;color:var(--primary)}
+.result-label{font-size:14px;color:var(--text2);margin-bottom:4px}
+.result-msg{font-size:15px;margin-top:8px;color:var(--text)}
+
+/* Stats Row */
+.stats-row{display:flex;gap:8px;margin-bottom:12px}
+.stat-item{flex:1;background:var(--card);border-radius:10px;padding:12px;text-align:center;box-shadow:0 1px 4px rgba(0,0,0,.06)}
+.stat-value{font-size:20px;font-weight:700;color:var(--primary)}
+.stat-label{font-size:11px;color:var(--text2);margin-top:2px}
+
+/* Progress Table */
+.history-item{display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--border)}
+.history-item:last-child{border-bottom:none}
+.history-score{font-size:18px;font-weight:700}
+.history-meta{font-size:13px;color:var(--text2)}
+
+/* Weakness Bar */
+.weakness-item{margin-bottom:14px}
+.weakness-header{display:flex;justify-content:space-between;font-size:14px;margin-bottom:4px}
+.weakness-bar{height:8px;background:var(--border);border-radius:4px;overflow:hidden}
+.weakness-fill{height:100%;border-radius:4px;transition:width .5s}
+
+/* Loading */
+.loading{text-align:center;padding:60px 20px}
+.spinner{display:inline-block;width:32px;height:32px;border:3px solid var(--border);border-top-color:var(--primary);border-radius:50%;animation:spin .7s linear infinite;margin-bottom:12px}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* Modal */
+.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:200;justify-content:center;align-items:flex-end}
+.modal-overlay.open{display:flex}
+.modal{background:var(--card);border-radius:16px 16px 0 0;width:100%;max-width:640px;max-height:85vh;overflow-y:auto;padding:20px 16px;padding-bottom:calc(20px + env(safe-area-inset-bottom))}
+.modal-handle{width:36px;height:4px;background:var(--border);border-radius:2px;margin:0 auto 16px}
+.modal-title{font-size:18px;font-weight:700;margin-bottom:16px}
+
+/* Toast */
+.toast{position:fixed;top:70px;left:50%;transform:translateX(-50%);background:var(--text);color:#fff;padding:10px 20px;border-radius:10px;font-size:14px;z-index:300;opacity:0;transition:opacity .3s;pointer-events:none;white-space:nowrap}
+.toast.show{opacity:1}
+
+/* Empty state */
+.empty{text-align:center;padding:40px 20px;color:var(--text2)}
+.empty-icon{font-size:48px;margin-bottom:12px;opacity:.5}
+.empty-text{font-size:15px}
+
+/* Confirm dialog */
+.confirm-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:250;justify-content:center;align-items:center}
+.confirm-overlay.open{display:flex}
+.confirm-box{background:var(--card);border-radius:16px;padding:24px;width:calc(100% - 48px);max-width:340px;text-align:center}
+.confirm-msg{font-size:15px;line-height:1.6;margin-bottom:20px}
+.confirm-btns{display:flex;gap:10px}
+.confirm-btns .btn{flex:1}
+
+/* Desktop adjustments */
+@media(min-width:641px){
+  .main{padding:20px 24px 100px}
+  .action-grid{grid-template-columns:1fr 1fr 1fr}
+  .fab{bottom:32px;right:32px}
+}
+
+/* Scroll progress */
+.scroll-progress{position:fixed;top:56px;left:0;height:3px;background:var(--primary);z-index:99;transition:width .1s;width:0}
+</style>
+</head>
+<body>
+
+<div id="scroll-progress" class="scroll-progress"></div>
+<header class="header">
+  <button class="header-btn" id="back-btn" onclick="goBack()" style="visibility:hidden">&#8592;</button>
+  <h1 id="header-title">题库系统</h1>
+  <button class="header-btn" id="header-action" style="visibility:hidden" onclick="headerAction()">&#8942;</button>
+</header>
+<main class="main" id="app"></main>
+<button class="fab" id="fab" onclick="fabAction()">+</button>
+<div class="toast" id="toast"></div>
+
+<!-- Confirm Dialog -->
+<div class="confirm-overlay" id="confirm-overlay">
+  <div class="confirm-box">
+    <div class="confirm-msg" id="confirm-msg"></div>
+    <div class="confirm-btns">
+      <button class="btn btn-outline" onclick="confirmCancel()">取消</button>
+      <button class="btn btn-danger" id="confirm-ok" onclick="confirmOk()">确定</button>
+    </div>
+  </div>
+</div>
+
+<!-- Bottom Sheet Modal -->
+<div class="modal-overlay" id="modal-overlay" onclick="closeModal(event)">
+  <div class="modal" onclick="event.stopPropagation()">
+    <div class="modal-handle"></div>
+    <div id="modal-content"></div>
+  </div>
+</div>
+
+<script>
+// ─── State ───
+let currentView = 'subjects';
+let viewParams = {};
+let viewHistory = [];
+let confirmCb = null;
+
+// ─── Router ───
+function navigate(view, params = {}, pushHistory = true) {
+  if (pushHistory && currentView !== view) {
+    viewHistory.push({ view: currentView, params: viewParams });
+  }
+  currentView = view;
+  viewParams = params;
+  render();
+  window.scrollTo(0, 0);
+}
+
+function goBack() {
+  if (viewHistory.length > 0) {
+    const prev = viewHistory.pop();
+    currentView = prev.view;
+    viewParams = prev.params;
+    render();
+    window.scrollTo(0, 0);
+  } else {
+    navigate('subjects', {}, false);
+    viewHistory = [];
+  }
+}
+
+function render() {
+  const app = document.getElementById('app');
+  const backBtn = document.getElementById('back-btn');
+  const fab = document.getElementById('fab');
+  const headerAction = document.getElementById('header-action');
+  const headerTitle = document.getElementById('header-title');
+
+  // Reset
+  fab.style.display = 'none';
+  headerAction.style.visibility = 'hidden';
+
+  switch (currentView) {
+    case 'subjects':
+      backBtn.style.visibility = 'hidden';
+      headerTitle.textContent = '题库系统';
+      fab.style.display = 'flex';
+      renderSubjects(app);
+      break;
+    case 'create-subject':
+      backBtn.style.visibility = 'visible';
+      headerTitle.textContent = '新建学科';
+      renderCreateSubject(app);
+      break;
+    case 'dashboard':
+      backBtn.style.visibility = 'visible';
+      headerAction.style.visibility = 'visible';
+      fab.style.display = 'none';
+      renderDashboard(app);
+      break;
+    case 'edit-subject':
+      backBtn.style.visibility = 'visible';
+      headerTitle.textContent = '编辑学科';
+      renderEditSubject(app);
+      break;
+    case 'exam':
+      backBtn.style.visibility = 'visible';
+      headerTitle.textContent = viewParams.subjectName || '答题';
+      fab.style.display = 'none';
+      break;
+    case 'review':
+      backBtn.style.visibility = 'visible';
+      headerTitle.textContent = '错题复盘';
+      fab.style.display = 'none';
+      break;
+    case 'progress':
+      backBtn.style.visibility = 'visible';
+      headerTitle.textContent = '进步指数';
+      fab.style.display = 'none';
+      renderProgress(app);
+      break;
+    case 'weakness':
+      backBtn.style.visibility = 'visible';
+      headerTitle.textContent = '薄弱领域';
+      fab.style.display = 'none';
+      renderWeakness(app);
+      break;
+    case 'aigen':
+      backBtn.style.visibility = 'visible';
+      headerTitle.textContent = 'AI 生成';
+      fab.style.display = 'none';
+      renderAIGen(app);
+      break;
+  }
+}
+
+// ─── Views ───
+
+async function renderSubjects(el) {
+  el.innerHTML = '<div class="loading"><div class="spinner"></div><p>加载中...</p></div>';
+  try {
+    const res = await fetch('/api/subjects');
+    const subjects = await res.json();
+
+    if (subjects.length === 0) {
+      el.innerHTML = '<div class="empty"><div class="empty-icon">&#128218;</div><div class="empty-text">还没有学科<br>点击右下角 + 创建</div></div>';
+      return;
+    }
+
+    let html = '<div class="stats-row">';
+    const totalQ = subjects.reduce((s, x) => s + x.questionCount, 0);
+    const totalW = subjects.reduce((s, x) => s + x.wrongCount, 0);
+    html += `<div class="stat-item"><div class="stat-value">${subjects.length}</div><div class="stat-label">学科</div></div>`;
+    html += `<div class="stat-item"><div class="stat-value">${totalQ}</div><div class="stat-label">总题目</div></div>`;
+    html += `<div class="stat-item"><div class="stat-value">${totalW}</div><div class="stat-label">待复习</div></div>`;
+    html += '</div>';
+
+    for (const s of subjects) {
+      const wrongBadge = s.wrongCount > 0 ? `<span class="action-badge">${s.wrongCount}错</span>` : '';
+      html += `
+        <div class="subject-item" onclick="navigate('dashboard',{subjectId:${s.id},subjectName:'${esc(s.name)}'})">
+          <div class="subject-info">
+            <div class="subject-name">${esc(s.name)} ${wrongBadge}</div>
+            ${s.description ? `<div class="subject-desc">${esc(s.description)}</div>` : ''}
+            <div class="subject-stats">
+              <span class="subject-stat"><strong>${s.questionCount}</strong> 题</span>
+            </div>
+          </div>
+          <div class="subject-arrow">&#8250;</div>
+        </div>`;
+    }
+    el.innerHTML = html;
+  } catch (e) {
+    el.innerHTML = `<div class="empty"><div class="empty-icon">&#9888;</div><div class="empty-text">加载失败: ${esc(e.message)}</div></div>`;
+  }
+}
+
+function renderCreateSubject(el) {
+  el.innerHTML = `
+    <div class="card">
+      <div class="form-group">
+        <label class="form-label">学科名称 *</label>
+        <input class="form-input" id="inp-name" placeholder="如: Python 基础" maxlength="50">
+      </div>
+      <div class="form-group">
+        <label class="form-label">学科描述</label>
+        <textarea class="form-input" id="inp-desc" placeholder="可选，简要描述学科内容" maxlength="200"></textarea>
+      </div>
+      <button class="btn btn-primary btn-block btn-lg" onclick="doCreateSubject()">创建</button>
+    </div>`;
+  document.getElementById('inp-name').focus();
+}
+
+function renderEditSubject(el) {
+  const s = viewParams.subject;
+  if (!s) { goBack(); return; }
+  el.innerHTML = `
+    <div class="card">
+      <div class="form-group">
+        <label class="form-label">学科名称</label>
+        <input class="form-input" id="inp-ename" value="${esc(s.name)}" maxlength="50">
+      </div>
+      <div class="form-group">
+        <label class="form-label">学科描述</label>
+        <textarea class="form-input" id="inp-edesc" maxlength="200">${esc(s.description || '')}</textarea>
+      </div>
+      <div class="form-group">
+        <label class="form-label">每次出题量</label>
+        <input class="form-input" id="inp-equizcount" type="number" value="${s.quiz_count || 0}" min="0" max="9999" placeholder="0 = 全部题目">
+        <div style="font-size:12px;color:var(--text2);margin-top:4px">设为 0 则每次使用全部题目，否则随机抽取相应数量</div>
+      </div>
+      <button class="btn btn-primary btn-block" onclick="doUpdateSubject()">保存</button>
+    </div>
+    <div style="margin-top:20px">
+      <button class="btn btn-danger btn-block" onclick="doDeleteSubject()">删除此学科</button>
+    </div>`;
+}
+
+async function renderDashboard(el) {
+  const { subjectId } = viewParams;
+  el.innerHTML = '<div class="loading"><div class="spinner"></div><p>加载中...</p></div>';
+  try {
+    const res = await fetch(`/api/subject/${subjectId}`);
+    const s = await res.json();
+    viewParams.subject = s;
+
+    const qc = s.quiz_count || 0;
+    const qcLabel = qc > 0 ? `随机 ${Math.min(qc, s.questionCount)} 题` : `${s.questionCount} 题`;
+
+    let html = `
+      <div class="stats-row">
+        <div class="stat-item"><div class="stat-value">${s.questionCount}</div><div class="stat-label">题库</div></div>
+        <div class="stat-item"><div class="stat-value">${qc > 0 ? qc : '全部'}</div><div class="stat-label">出题量</div></div>
+        <div class="stat-item"><div class="stat-value">${s.wrongCount}</div><div class="stat-label">错题</div></div>
+      </div>
+      ${s.description ? `<div class="card" style="padding:12px 16px"><p style="font-size:13px;color:var(--text2)">${esc(s.description)}</p></div>` : ''}
+      <div class="action-grid">
+        <div class="action-item ${s.questionCount === 0 ? 'disabled' : ''}" onclick="startExam(${subjectId},'${esc(s.name)}',${qc})">
+          <div class="action-icon">&#9997;</div>
+          <div class="action-label">开始答题</div>
+          <div style="font-size:11px;color:var(--text2);margin-top:2px">${esc(qcLabel)}</div>
+        </div>
+        <div class="action-item ${s.wrongCount === 0 ? 'disabled' : ''}" onclick="startReview(${subjectId})">
+          <div class="action-icon">&#128260;</div>
+          <div class="action-label">错题复盘${s.wrongCount > 0 ? `<span class="action-badge">${s.wrongCount}</span>` : ''}</div>
+        </div>
+        <div class="action-item" onclick="navigate('progress',{subjectId:${subjectId}})">
+          <div class="action-icon">&#128200;</div>
+          <div class="action-label">进步指数</div>
+        </div>
+        <div class="action-item" onclick="navigate('weakness',{subjectId:${subjectId}})">
+          <div class="action-icon">&#128269;</div>
+          <div class="action-label">薄弱领域</div>
+        </div>
+        <div class="action-item" onclick="navigate('aigen',{subjectId:${subjectId},subjectName:'${esc(s.name)}'})">
+          <div class="action-icon">&#129302;</div>
+          <div class="action-label">AI 生成</div>
+        </div>
+        <div class="action-item" onclick="navigate('edit-subject',{subjectId:${subjectId},subject:'${esc(JSON.stringify(s))}'})">
+          <div class="action-icon">&#9998;</div>
+          <div class="action-label">编辑学科</div>
+        </div>
+      </div>`;
+    el.innerHTML = html;
+    document.getElementById('header-title').textContent = s.name;
+  } catch (e) {
+    el.innerHTML = `<div class="empty"><div class="empty-icon">&#9888;</div><div class="empty-text">加载失败</div></div>`;
+  }
+}
+
+async function renderProgress(el) {
+  el.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+  try {
+    const res = await fetch(`/api/progress/${viewParams.subjectId}`);
+    const data = await res.json();
+    if (!data.summary) {
+      el.innerHTML = '<div class="empty"><div class="empty-icon">&#128203;</div><div class="empty-text">还没有考试记录<br>快去做一套题吧</div></div>';
+      return;
+    }
+    const { summary, history } = data;
+    let trendIcon = summary.diff > 3 ? '&#128200;' : summary.diff < -3 ? '&#128201;' : '&#10132;';
+    let html = `
+      <div class="result-panel">
+        <div class="result-label">共完成 ${summary.total} 次考试</div>
+        <div class="result-score">${summary.overallAvg.toFixed(1)}</div>
+        <div class="result-label">平均分</div>
+        <div class="result-msg">${trendIcon} ${summary.trend} &nbsp; 最高 ${summary.best} &nbsp; 最低 ${summary.worst}</div>
+      </div>
+      <div class="card"><div class="card-title">考试记录</div>`;
+
+    for (let i = history.length - 1; i >= 0; i--) {
+      const h = history[i];
+      const date = h.created_at.slice(5, 16);
+      const rate = ((h.correct / h.total) * 100).toFixed(0);
+      const color = h.score >= 80 ? 'var(--success)' : h.score >= 60 ? 'var(--warning)' : 'var(--danger)';
+      html += `<div class="history-item">
+        <div><div class="history-score" style="color:${color}">${h.score}分</div><div class="history-meta">${h.correct}/${h.total} (${rate}%)</div></div>
+        <div class="history-meta">${date}</div>
+      </div>`;
+    }
+    html += '</div>';
+    el.innerHTML = html;
+  } catch (e) {
+    el.innerHTML = '<div class="empty"><div class="empty-text">加载失败</div></div>';
+  }
+}
+
+async function renderWeakness(el) {
+  el.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+  try {
+    const res = await fetch(`/api/weakness/${viewParams.subjectId}`);
+    const domains = await res.json();
+    if (domains.length === 0) {
+      el.innerHTML = '<div class="empty"><div class="empty-icon">&#128170;</div><div class="empty-text">没有错题记录<br>薄弱领域分析需要错题数据</div></div>';
+      return;
+    }
+    const maxWrong = Math.max(...domains.map(d => d.wrongCount));
+    let html = '<div class="card"><div class="card-title">按错题数降序</div>';
+    for (const d of domains) {
+      const pct = Math.round((d.wrongCount / maxWrong) * 100);
+      const color = pct > 70 ? 'var(--danger)' : pct > 40 ? '#e17055' : 'var(--warning)';
+      html += `<div class="weakness-item">
+        <div class="weakness-header"><span>${esc(d.domain)}</span><span>${d.wrongCount}错 / ${d.total}题 &nbsp; ${d.errorRate}%</span></div>
+        <div class="weakness-bar"><div class="weakness-fill" style="width:${pct}%;background:${color}"></div></div>
+      </div>`;
+    }
+    html += '</div>';
+    el.innerHTML = html;
+  } catch (e) {
+    el.innerHTML = '<div class="empty"><div class="empty-text">加载失败</div></div>';
+  }
+}
+
+function renderAIGen(el) {
+  el.innerHTML = `
+    <div class="card">
+      <p style="font-size:14px;color:var(--text2);margin-bottom:16px">使用 AI 自动生成试题并导入到当前学科。生成过程可能需要 30-60 秒。</p>
+      <div class="form-group">
+        <label class="form-label">题目数量</label>
+        <input class="form-input" id="inp-aigen-count" type="number" value="65" min="1" max="200">
+      </div>
+      <button class="btn btn-primary btn-block" id="btn-aigen" onclick="doAIGen()">开始生成</button>
+    </div>`;
+}
+
+// ─── Exam / Review Logic ───
+
+let quizData = [];
+let isReviewMode = false;
+let examSubmitted = false;
+
+async function startExam(subjectId, subjectName, quizCount) {
+  const app = document.getElementById('app');
+  app.innerHTML = '<div class="loading"><div class="spinner"></div><p>加载试题...</p></div>';
+  document.getElementById('header-title').textContent = subjectName;
+
+  try {
+    const url = quizCount > 0
+      ? `/api/quiz/${subjectId}?random=${quizCount}`
+      : `/api/quiz/${subjectId}`;
+    const res = await fetch(url);
+    if (!res.ok) {
+      toast('该学科暂无题目');
+      goBack();
+      return;
+    }
+    quizData = await res.json();
+    isReviewMode = false;
+    examSubmitted = false;
+    currentView = 'exam';
+    viewParams = { subjectId, subjectName, source: 'all' };
+    document.getElementById('back-btn').style.visibility = 'visible';
+    document.getElementById('fab').style.display = 'none';
+    renderQuiz();
+  } catch (e) {
+    toast('加载失败');
+    goBack();
+  }
+}
+
+async function startReview(subjectId) {
+  const app = document.getElementById('app');
+  app.innerHTML = '<div class="loading"><div class="spinner"></div><p>加载错题...</p></div>';
+
+  try {
+    const res = await fetch(`/api/review?subjectId=${subjectId}&count=10`);
+    const data = await res.json();
+    if (data.length === 0) {
+      toast('没有错题需要复习');
+      goBack();
+      return;
+    }
+    quizData = data.map(item => ({
+      ...item.question,
+      _dbId: item.id,
+      _correctStreak: item.correct_streak
+    }));
+    isReviewMode = true;
+    examSubmitted = false;
+    currentView = 'review';
+    viewParams = { subjectId };
+    document.getElementById('header-title').textContent = '错题复盘';
+    document.getElementById('back-btn').style.visibility = 'visible';
+    document.getElementById('fab').style.display = 'none';
+    renderQuiz();
+  } catch (e) {
+    toast('加载失败');
+    goBack();
+  }
+}
+
+function renderQuiz() {
+  const app = document.getElementById('app');
+  let html = `<div style="font-size:13px;color:var(--text2);margin-bottom:12px">
+    ${isReviewMode ? `随机 ${quizData.length} 道错题` : `共 ${quizData.length} 题`}
+  </div>`;
+
+  for (let i = 0; i < quizData.length; i++) {
+    const q = quizData[i];
+    const uid = i; // use index for unique DOM IDs
+    const typeLabel = q.type === 'single' ? '单选' : '多选';
+    const streakInfo = isReviewMode && q._correctStreak > 0 ? `<span class="q-streak">已连续答对 ${q._correctStreak} 次</span>` : '';
+
+    let optsHtml = '';
+    for (const [key, value] of Object.entries(q.options)) {
+      const inputType = q.type === 'single' ? 'radio' : 'checkbox';
+      const iconClass = inputType === 'radio' ? 'opt-radio' : 'opt-checkbox';
+      optsHtml += `<div class="opt-item" id="opt-${uid}-${key}" onclick="toggleOption(${uid},'${key}','${inputType}')">
+        <div class="${iconClass}" id="icon-${uid}-${key}"></div>
+        <div class="opt-text"><span class="opt-key">${key}.</span>${esc(value)}</div>
+      </div>`;
+    }
+
+    html += `<div class="q-card" id="qcard-${uid}">
+      <div class="q-num">第 ${i + 1} 题 <span class="q-type">${typeLabel}</span> <span class="q-type">${q.domain || ''}</span>${streakInfo}</div>
+      <div class="q-text">${esc(q.question)}</div>
+      ${optsHtml}
+      <div class="q-explanation" id="exp-${uid}">${esc(q.explanation || '')}</div>
+    </div>`;
+  }
+
+  html += `<button class="btn btn-primary btn-block btn-lg" id="btn-submit" onclick="submitQuiz()" style="margin-top:8px">交卷</button>`;
+  app.innerHTML = html;
+}
+
+// Track selections
+const selections = {};
+
+function toggleOption(qId, key, inputType) {
+  if (examSubmitted) return;
+  if (!selections[qId]) selections[qId] = new Set();
+
+  if (inputType === 'radio') {
+    // Deselect previous
+    const prev = selections[qId];
+    if (prev.size > 0) {
+      prev.forEach(k => {
+        document.getElementById(`opt-${qId}-${k}`).classList.remove('selected');
+        document.getElementById(`icon-${qId}-${k}`).classList.remove('checked');
+      });
+      selections[qId].clear();
+    }
+    selections[qId].add(key);
+  } else {
+    if (selections[qId].has(key)) {
+      selections[qId].delete(key);
+    } else {
+      selections[qId].add(key);
+    }
+  }
+
+  const el = document.getElementById(`opt-${qId}-${key}`);
+  const icon = document.getElementById(`icon-${qId}-${key}`);
+  if (selections[qId].has(key)) {
+    el.classList.add('selected');
+    icon.classList.add('checked');
+  } else {
+    el.classList.remove('selected');
+    icon.classList.remove('checked');
+  }
+}
+
+async function submitQuiz() {
+  if (examSubmitted) return;
+  examSubmitted = true;
+
+  let score = 0;
+  let wrongCount = 0;
+  const total = quizData.length;
+  const perQ = 100 / total;
+  const wrongForDB = [];
+  const reviewResults = [];
+
+  for (let i = 0; i < quizData.length; i++) {
+    const q = quizData[i];
+    const uid = i;
+    const userAnswers = Array.from(selections[uid] || []).sort();
+    const correctAnswers = [...q.correct].sort();
+    const isCorrect = userAnswers.join(',') === correctAnswers.join(',') && userAnswers.length > 0;
+
+    const card = document.getElementById(`qcard-${uid}`);
+    document.getElementById(`exp-${uid}`).style.display = 'block';
+
+    // Disable all options
+    for (const key of Object.keys(q.options)) {
+      const opt = document.getElementById(`opt-${uid}-${key}`);
+      opt.onclick = null;
+      opt.style.cursor = 'default';
+      if (q.correct.includes(key)) {
+        opt.classList.add('correct-answer');
+      } else if (userAnswers.includes(key)) {
+        opt.classList.add('wrong-answer');
+      }
+    }
+
+    if (isCorrect) {
+      score += perQ;
+      card.classList.add('correct');
+      if (isReviewMode) reviewResults.push({ id: q._dbId, isCorrect: true });
+    } else {
+      wrongCount++;
+      card.classList.add('wrong');
+      if (!isReviewMode) wrongForDB.push(q);
+      if (isReviewMode) reviewResults.push({ id: q._dbId, isCorrect: false });
+    }
+  }
+
+  const finalScore = Math.round(score);
+
+  // Submit to server
+  if (isReviewMode) {
+    try {
+      const r = await fetch('/api/review/submit', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ results: reviewResults })
+      });
+      const data = await r.json();
+      if (data.mastered > 0) toast(`${data.mastered} 道题已掌握并移除`);
+    } catch {}
+  } else {
+    try {
+      await fetch('/api/submit', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          source: viewParams.source || 'all',
+          wrongQuestions: wrongForDB,
+          totalQuestions: total,
+          correctCount: total - wrongForDB.length,
+          score: finalScore,
+          subjectId: viewParams.subjectId
+        })
+      });
+    } catch {}
+  }
+
+  // Show result
+  const color = finalScore >= 80 ? 'var(--success)' : finalScore >= 60 ? 'var(--warning)' : 'var(--danger)';
+  const msg = finalScore >= 80 ? '表现优秀' : finalScore >= 60 ? '继续努力' : '需要加强';
+  const resultHtml = `
+    <div class="result-panel">
+      <div class="result-label">得分</div>
+      <div class="result-score" style="color:${color}">${finalScore}</div>
+      <div class="result-msg">${msg} &nbsp; ${total - wrongCount}/${total} 正确</div>
+    </div>
+    <div style="display:flex;gap:10px;margin-bottom:16px">
+      <button class="btn btn-primary btn-block" onclick="goBack()">返回</button>
+      <button class="btn btn-outline btn-block" onclick="retryWrong()">重做错题</button>
+    </div>`;
+
+  const submitBtn = document.getElementById('btn-submit');
+  if (submitBtn) submitBtn.outerHTML = resultHtml;
+  else document.getElementById('app').insertAdjacentHTML('afterbegin', resultHtml);
+
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function retryWrong() {
+  if (!isReviewMode) {
+    startReview(viewParams.subjectId);
+  } else {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+}
+
+// ─── Actions ───
+
+async function doCreateSubject() {
+  const name = document.getElementById('inp-name').value.trim();
+  const desc = document.getElementById('inp-desc').value.trim();
+  if (!name) { toast('请输入学科名称'); return; }
+
+  try {
+    const res = await fetch('/api/subjects', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, description: desc })
+    });
+    if (!res.ok) { const d = await res.json(); toast(d.error); return; }
+    toast('创建成功');
+    goBack();
+  } catch (e) {
+    toast('创建失败');
+  }
+}
+
+async function doUpdateSubject() {
+  const name = document.getElementById('inp-ename').value.trim();
+  const desc = document.getElementById('inp-edesc').value.trim();
+  const quizCount = parseInt(document.getElementById('inp-equizcount').value) || 0;
+  if (!name) { toast('名称不能为空'); return; }
+
+  try {
+    const res = await fetch(`/api/subjects/${viewParams.subjectId}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, description: desc, quizCount })
+    });
+    if (!res.ok) { const d = await res.json(); toast(d.error); return; }
+    toast('已保存');
+    viewParams.subject.name = name;
+    viewParams.subject.description = desc;
+    viewParams.subject.quiz_count = quizCount;
+    goBack();
+  } catch (e) {
+    toast('保存失败');
+  }
+}
+
+function doDeleteSubject() {
+  const name = viewParams.subject?.name || '';
+  showConfirm(`确定删除学科「${name}」？所有题目、错题和记录将一并删除。`, async () => {
+    try {
+      await fetch(`/api/subjects/${viewParams.subjectId}`, { method: 'DELETE' });
+      toast('已删除');
+      viewHistory = [];
+      navigate('subjects');
+    } catch (e) {
+      toast('删除失败');
+    }
+  });
+}
+
+async function doAIGen() {
+  const count = parseInt(document.getElementById('inp-aigen-count').value) || 65;
+  const btn = document.getElementById('btn-aigen');
+  btn.disabled = true;
+  btn.textContent = '生成中，请稍候...';
+
+  try {
+    const res = await fetch('/api/aigen', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ subjectId: viewParams.subjectId, questionCount: count })
+    });
+    const data = await res.json();
+    if (!res.ok) { toast(data.error || '生成失败'); btn.disabled = false; btn.textContent = '开始生成'; return; }
+    toast(`成功生成 ${data.count} 道题`);
+    goBack();
+  } catch (e) {
+    toast('生成失败: ' + e.message);
+    btn.disabled = false;
+    btn.textContent = '开始生成';
+  }
+}
+
+// ─── UI Helpers ───
+
+function esc(str) {
+  if (!str) return '';
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+function toast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(el._t);
+  el._t = setTimeout(() => el.classList.remove('show'), 2500);
+}
+
+function showConfirm(msg, cb) {
+  document.getElementById('confirm-msg').textContent = msg;
+  document.getElementById('confirm-overlay').classList.add('open');
+  confirmCb = cb;
+}
+function confirmOk() {
+  document.getElementById('confirm-overlay').classList.remove('open');
+  if (confirmCb) confirmCb();
+  confirmCb = null;
+}
+function confirmCancel() {
+  document.getElementById('confirm-overlay').classList.remove('open');
+  confirmCb = null;
+}
+
+function fabAction() {
+  if (currentView === 'subjects') {
+    navigate('create-subject');
+  }
+}
+
+function headerAction() {
+  if (currentView === 'dashboard') {
+    navigate('edit-subject', { subjectId: viewParams.subjectId, subject: viewParams.subject });
+  }
+}
+
+function closeModal(e) {
+  if (e && e.target !== document.getElementById('modal-overlay')) return;
+  document.getElementById('modal-overlay').classList.remove('open');
+}
+
+// Scroll progress
+window.addEventListener('scroll', () => {
+  const h = document.documentElement;
+  const pct = (h.scrollTop / (h.scrollHeight - h.clientHeight)) * 100 || 0;
+  document.getElementById('scroll-progress').style.width = pct + '%';
+});
+
+// ─── Init ───
+render();
+</script>
+</body>
+</html>

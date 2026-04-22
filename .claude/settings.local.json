@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(rtk ls:*)",
+      "Bash(timeout 5 node server.js)",
+      "Bash(cd:*)",
+      "Bash(npx kill-port:*)",
+      "Bash(lsof -ti:3000)",
+      "Bash(xargs kill:*)",
+      "Bash(taskkill //F //FI 'WINDOWTITLE eq node*3000*')",
+      "Bash(rm -f quiz.db quiz.db-shm quiz.db-wal)",
+      "Bash(timeout 6 node server.js)",
+      "Bash(curl -s http://localhost:3000/api/subjects)",
+      "Bash(node:*)"
+    ]
+  }
+}

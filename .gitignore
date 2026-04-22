@@ -1,0 +1,5 @@
+.env
+quiz.db
+node_modules
+.git
+inputs
