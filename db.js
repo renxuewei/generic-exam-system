@@ -1,4 +1,5 @@
 const { createClient } = require('@libsql/client');
+const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
 
@@ -115,6 +116,14 @@ async function runMigration() {
     // Add is_disabled to users
     if (!(await columnExists('users', 'is_disabled'))) {
         await db.execute('ALTER TABLE users ADD COLUMN is_disabled INTEGER DEFAULT 0');
+    }
+
+    // Add reset_token columns for password reset
+    if (!(await columnExists('users', 'reset_token'))) {
+        await db.execute('ALTER TABLE users ADD COLUMN reset_token TEXT');
+    }
+    if (!(await columnExists('users', 'reset_expires_at'))) {
+        await db.execute('ALTER TABLE users ADD COLUMN reset_expires_at TEXT');
     }
 
     // Recreate composite indexes with user_id
@@ -659,6 +668,32 @@ async function getWeakDomains(userId, subjectId) {
     return result;
 }
 
+// ─── Password Reset ───
+
+async function createPasswordResetToken(email) {
+    const user = await findUserByEmail(email);
+    if (!user) return null;
+    const token = crypto.randomBytes(32).toString('hex');
+    const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString(); // 30 min
+    await db.execute(
+        'UPDATE users SET reset_token = ?, reset_expires_at = ? WHERE id = ?',
+        [token, expiresAt, user.id]
+    );
+    return token;
+}
+
+async function findUserByResetToken(token) {
+    const result = await db.execute('SELECT * FROM users WHERE reset_token = ?', [token]);
+    return result.rows[0] || null;
+}
+
+async function resetPassword(userId, passwordHash) {
+    await db.execute(
+        'UPDATE users SET password_hash = ?, reset_token = NULL, reset_expires_at = NULL WHERE id = ?',
+        [passwordHash, userId]
+    );
+}
+
 // ─── Admin Functions ───
 
 async function getAllUsers() {
@@ -845,6 +880,10 @@ module.exports = {
     findUserByToken,
     activateUser,
     getUserById,
+    // Password Reset
+    createPasswordResetToken,
+    findUserByResetToken,
+    resetPassword,
     // Admin
     getAllUsers,
     setUserDisabled,

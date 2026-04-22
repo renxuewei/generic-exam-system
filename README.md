@@ -1,28 +1,25 @@
-# 🎓 通用题库系统 (Generic Exam System)
+# 通用题库系统 (Generic Exam System)
 
-一个功能完整的多学科题库和考试系统，支持AI智能生成试题、错题管理、学习进度追踪等功能。
+多学科题库和考试系统，支持用户注册登录、AI 智能生成试题、错题管理、学习进度追踪、管理后台、数据备份恢复等功能。
 
-## ✨ 主要特性
+## 主要特性
 
-- **📚 多学科管理**: 支持创建和管理多个学科的题库
-- **🤖 AI智能生成**: 基于OpenAI兼容API自动生成高质量模拟题
-- **📝 完整考试系统**: 支持在线做题、自动评卷、答题记录
-- **❌ 错题管理**: 自动收集和管理答错的题目
-- **📊 学习分析**: 
-  - 学习进度统计
-  - 弱点域分析
-  - 做题历史记录
-  - 错题率统计
-- **💾 数据导入**: 支持JSON格式题目批量导入
-- **🎯 灵活查询**: 按学科、题型、难度等多维度查询题目
+- **多学科管理**: 创建和管理多个学科的题库
+- **用户系统**: 邮箱注册、激活、登录、忘记密码
+- **AI 智能生成**: 基于 OpenAI 兼容 API 自动生成模拟题
+- **完整考试系统**: 在线做题、自动评卷、答题记录
+- **错题管理**: 自动收集错题，连续答对 3 次自动移除
+- **学习分析**: 进步指数、弱点域分析、做题历史、错题率统计
+- **管理后台**: 查看用户列表、禁用/启用用户、查看用户学科数据
+- **数据备份/恢复**: 下载全部业务数据（ZIP），上传合并恢复
+- **数据导入**: 支持 JSON 格式题目批量导入
 
-## 🚀 快速开始
+## 快速开始
 
 ### 前置要求
 
-- Node.js (v14 或更高版本)
-- npm 或 yarn
-- OpenAI API密钥（用于AI生成题目功能）
+- Node.js (v18 或更高版本)
+- npm
 
 ### 安装依赖
 
@@ -32,184 +29,122 @@ npm install
 
 ### 环境配置
 
-创建 `.env` 文件配置AI服务：
+创建 `.env` 文件（参考 `.env.example`）：
 
 ```env
-AI_API_KEY=your_openai_api_key
-AI_BASE_URL=https://api.openai.com/v1
-AI_MODEL=gpt-3.5-turbo
+# AI（可选，用于 AI 生成题目）
+AI_API_KEY=sk-<your-api-key>
+AI_BASE_URL=https://api.deepseek.ai/v1
+AI_MODEL=deepseek-reasoner
+
+# Session
+SESSION_SECRET=your-random-secret-here
+
+# 邮件（Resend，用于注册激活和密码重置）
+RESEND_API_KEY=re_xxxxx
+EMAIL_FROM=noreply@yourdomain.com
+BASE_URL=https://your-app.vercel.app
+
+# 管理后台
+ADMIN_TOKEN=your-secure-admin-token
 ```
 
-> 💡 **提示**: 也支持OpenAI兼容的第三方API服务（如LM Studio等）
+> 不配置 `RESEND_API_KEY` 时，激活链接和重置链接会输出到控制台。
 
-### 启动应用
+### 启动
 
 ```bash
 npm start
 ```
 
-或使用启动脚本（Windows）：
+应用将在 `http://localhost:8000` 启动。本地开发使用文件型 SQLite（`quiz.db`），无需额外配置数据库。
 
-```bash
-start.cmd
-```
-
-应用将在 `http://localhost:8000` 启动
-
-## 📁 项目结构
+## 项目结构
 
 ```
 generic-exam-sys/
-├── server.js              # Express 服务器主文件
-├── db.js                  # SQLite 数据库操作模块
-├── ai-gen.js              # AI相关功能（调用OpenAI API）
-├── package.json           # 项目配置和依赖
-├── prompt.txt             # AI生成题目的系统提示词
-├── .env                   # 环境变量配置（需要手动创建）
-├── start.cmd              # Windows启动脚本
+├── server.js          # Express 服务器
+├── db.js              # 数据库操作（@libsql/client）
+├── email.js           # 邮件发送（Resend）
+├── ai-gen.js          # AI 试题生成
+├── prompt.txt         # AI 系统提示词
+├── package.json
+├── vercel.json        # Vercel 部署配置
+├── .env.example       # 环境变量模板
 │
-├── public/                # 前端文件
-│   └── index.html         # 单页应用主页面
+├── public/
+│   └── index.html     # 单页应用（前端）
 │
-└── inputs/                # 数据输入文件夹
-    ├── *.js               # JavaScript格式题目文件
-    ├── *.json             # JSON格式题目文件
-    └── errors-*.txt       # 错误日志
+└── inputs/            # 题目数据输入
+    ├── *.js           # JS 格式题目文件
+    ├── *.json         # JSON 格式题目文件
+    └── errors-*.txt   # 错题日志
 ```
 
-## 🔧 核心功能API
+## API 概览
 
-### 学科管理
+### 认证
 
-| 端点 | 方法 | 说明 |
+| 方法 | 端点 | 说明 |
 |------|------|------|
-| `/api/subjects` | GET | 获取所有学科列表 |
-| `/api/subject/:id` | GET | 获取特定学科详情 |
-| `/api/subject` | POST | 创建新学科 |
-| `/api/subject/:id` | PUT | 更新学科 |
-| `/api/subject/:id` | DELETE | 删除学科 |
+| POST | `/api/auth/register` | 注册（发送激活邮件） |
+| POST | `/api/auth/activate` | 激活账户 |
+| POST | `/api/auth/login` | 登录 |
+| POST | `/api/auth/logout` | 登出 |
+| GET | `/api/auth/me` | 获取当前用户 |
+| POST | `/api/auth/forgot-password` | 发送密码重置邮件 |
+| POST | `/api/auth/reset-password` | 重置密码 |
 
-### 题目管理
+### 学科管理（需登录）
 
-| 端点 | 方法 | 说明 |
+| 方法 | 端点 | 说明 |
 |------|------|------|
-| `/api/questions/by-subject/:subject` | GET | 按学科获取题目 |
-| `/api/questions/random` | GET | 获取随机题目 |
-| `/api/questions/import` | POST | 导入题目 |
-| `/api/quiz/generate` | POST | AI生成模拟题 |
+| GET | `/api/subjects` | 学科列表 |
+| GET | `/api/subject/:id` | 学科详情 |
+| POST | `/api/subjects` | 创建学科 |
+| PUT | `/api/subjects/:id` | 更新学科 |
+| DELETE | `/api/subjects/:id` | 删除学科 |
 
-### 学习追踪
+### 考试与错题（需登录）
 
-| 端点 | 方法 | 说明 |
+| 方法 | 端点 | 说明 |
 |------|------|------|
-| `/api/exam/history` | POST | 保存考试记录 |
-| `/api/progress/:subject` | GET | 获取学习进度 |
-| `/api/wrong-questions` | GET | 获取错题集 |
-| `/api/weak-domains/:subject` | GET | 分析弱点域 |
+| GET | `/api/quiz/:subjectId` | 获取题目（`?random=N` 随机抽题） |
+| GET | `/api/sources/:subjectId` | 获取题集来源 |
+| POST | `/api/submit` | 提交考试结果 |
+| GET | `/api/review` | 获取错题（`?subjectId=&count=`） |
+| POST | `/api/review/submit` | 提交错题复习结果 |
+| GET | `/api/progress/:subjectId` | 学习进度 |
+| GET | `/api/weakness/:subjectId` | 弱点域分析 |
+| POST | `/api/aigen` | AI 生成题目 |
 
-## 💾 数据格式
+### 备份恢复（需登录）
 
-### 题目JSON格式
+| 方法 | 端点 | 说明 |
+|------|------|------|
+| GET | `/api/backup/export` | 下载 ZIP 备份 |
+| POST | `/api/backup/restore` | 上传 ZIP 恢复 |
 
-```json
-[
-  {
-    "id": 1,
-    "type": "single",
-    "domain": "领域名",
-    "question": "题目内容",
-    "options": {
-      "A": "选项A",
-      "B": "选项B",
-      "C": "选项C",
-      "D": "选项D"
-    },
-    "correct": ["B"],
-    "explanation": "解析说明"
-  },
-  {
-    "id": 2,
-    "type": "multiple",
-    "domain": "领域名",
-    "question": "题目内容（选两项）",
-    "options": {
-      "A": "选项A",
-      "B": "选项B",
-      "C": "选项C",
-      "D": "选项D",
-      "E": "选项E"
-    },
-    "correct": ["B", "E"],
-    "explanation": "解析说明"
-  }
-]
-```
+### 管理后台
 
-### 支持的题型
+| 方法 | 端点 | 说明 |
+|------|------|------|
+| GET | `/api/admin/users` | 用户列表 |
+| PUT | `/api/admin/users/:id/toggle` | 禁用/启用用户 |
+| GET | `/api/admin/users/:id/subjects` | 用户学科详情 |
 
-- `single` - 单选题
-- `multiple` - 多选题
-- `true-false` - 判断题
-- `fill-blank` - 填空题
-- `short-answer` - 简答题
+> 管理接口通过 `X-Admin-Token` 请求头传递 `ADMIN_TOKEN` 进行认证。
 
-## 🎯 使用场景
+## 数据库
 
-1. **教育机构**: 创建和管理各类学科题库
-2. **考试培训**: 快速生成模拟题进行自适应学习
-3. **学生自学**: 错题管理和弱点分析助力高效学习
-4. **题库共享**: 支持题目导入和数据导出
+本地开发使用文件型 SQLite（通过 `@libsql/client`），Vercel 部署使用 Turso 云数据库。
 
-## 🛠️ 开发说明
+主要数据表：`users`、`subjects`、`questions`、`wrong_questions`、`exam_history`、`sessions`
 
-### 主要依赖
+## 支持的题型
 
-- **express**: Web框架，处理HTTP请求
-- **better-sqlite3**: 轻量级SQLite数据库
-- **inquirer**: 命令行交互工具
-
-### 运行开发模式
-
-```bash
-npm start
-```
-
-### 项目配置
-
-- 服务器端口: 8000
-- 数据库: SQLite (data.db)
-- 前端: 单页应用 (SPA)
-
-## 📊 数据库架构
-
-系统使用SQLite数据库，包含以下主要表：
-
-- **subjects** - 学科信息
-- **questions** - 题目库
-- **wrong_questions** - 错题集
-- **exam_history** - 考试历史
-- **progress** - 学习进度
-
-## 🔐 注意事项
-
-1. **API密钥安全**: 不要将 `.env` 文件提交到版本控制系统
-2. **数据备份**: 定期备份SQLite数据库文件
-3. **题目质量**: AI生成的题目需要人工审核后方可使用
-4. **隐私保护**: 确保题目数据符合版权和隐私要求
-
-## 📝 许可证
-
-MIT
-
-## 🤝 贡献
-
-欢迎提交问题报告和功能建议！
-
-## 📞 联系方式
-
-如有问题或建议，欢迎开issue或联系项目维护者。
-
----
-
-**最后更新**: 2026年4月
-**版本**: 2.0.0
+- `single` — 单选题
+- `multiple` — 多选题
+- `true-false` — 判断题
+- `fill-blank` — 填空题
+- `short-answer` — 简答题

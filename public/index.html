@@ -256,7 +256,7 @@ async function doLogout() {
 }
 
 // ─── Router ───
-const PUBLIC_VIEWS = ['auth-login', 'auth-register', 'auth-activate', 'auth-pending'];
+const PUBLIC_VIEWS = ['auth-login', 'auth-register', 'auth-activate', 'auth-pending', 'auth-forgot', 'auth-reset-password'];
 const ADMIN_VIEWS = ['admin-login', 'admin-users', 'admin-user-detail'];
 
 function navigate(view, params = {}, pushHistory = true) {
@@ -335,6 +335,16 @@ function render() {
       backBtn.style.visibility = 'hidden';
       headerTitle.textContent = '题库系统';
       renderPending(app);
+      break;
+    case 'auth-forgot':
+      backBtn.style.visibility = 'visible';
+      headerTitle.textContent = '忘记密码';
+      renderForgotPassword(app);
+      break;
+    case 'auth-reset-password':
+      backBtn.style.visibility = 'hidden';
+      headerTitle.textContent = '重置密码';
+      renderResetPassword(app);
       break;
     case 'subjects':
       backBtn.style.visibility = 'hidden';
@@ -430,6 +440,9 @@ function renderLogin(el) {
           <input class="form-input" id="inp-password" type="password" placeholder="输入密码" autocomplete="current-password">
         </div>
         <button class="btn btn-primary btn-block btn-lg" onclick="doLogin()">登录</button>
+        <div style="text-align:right;margin-top:12px">
+          <span class="auth-link" onclick="navigate('auth-forgot')">忘记密码？</span>
+        </div>
       </div>
       <div style="text-align:center;margin-top:20px;font-size:14px;color:var(--text2)">
         还没有账号？<span class="auth-link" onclick="navigate('auth-register')">注册</span>
@@ -469,15 +482,105 @@ function renderRegister(el) {
 }
 
 function renderPending(el) {
+  const isReset = viewParams.fromReset;
   el.innerHTML = `
     <div class="auth-success">
       <div class="auth-success-icon">&#9993;</div>
-      <h2>注册成功</h2>
-      <p>我们已向您的邮箱发送了激活链接<br>请查收邮件并点击链接激活账户</p>
+      <h2>${isReset ? '邮件已发送' : '注册成功'}</h2>
+      <p>${isReset ? '如果该邮箱已注册，您将收到密码重置邮件<br>请查收邮件并点击链接重置密码' : '我们已向您的邮箱发送了激活链接<br>请查收邮件并点击链接激活账户'}</p>
       <div style="margin-top:24px">
         <button class="btn btn-outline" onclick="navigate('auth-login')">返回登录</button>
       </div>
     </div>`;
+}
+
+function renderForgotPassword(el) {
+  el.innerHTML = `
+    <div class="auth-container">
+      <div class="auth-logo">
+        <h2>忘记密码</h2>
+        <p>输入注册邮箱，我们将发送重置链接</p>
+      </div>
+      <div class="card">
+        <div class="auth-error" id="forgot-error"></div>
+        <div class="form-group">
+          <label class="form-label">邮箱</label>
+          <input class="form-input" id="inp-forgot-email" type="email" placeholder="your@email.com" autocomplete="email">
+        </div>
+        <button class="btn btn-primary btn-block btn-lg" onclick="doForgotPassword()">发送重置链接</button>
+      </div>
+    </div>`;
+  document.getElementById('inp-forgot-email').focus();
+}
+
+async function doForgotPassword() {
+  const email = document.getElementById('inp-forgot-email').value.trim();
+  const errEl = document.getElementById('forgot-error');
+  errEl.style.display = 'none';
+  if (!email) { errEl.textContent = '请输入邮箱'; errEl.style.display = 'block'; return; }
+  try {
+    const res = await fetch('/api/auth/forgot-password', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email })
+    });
+    const data = await res.json();
+    if (!res.ok) { errEl.textContent = data.error; errEl.style.display = 'block'; return; }
+    currentView = 'auth-pending';
+    viewParams = { fromReset: true };
+    render();
+  } catch (e) {
+    errEl.textContent = '网络错误，请稍后重试';
+    errEl.style.display = 'block';
+  }
+}
+
+async function renderResetPassword(el) {
+  const token = viewParams.token;
+  if (!token) {
+    el.innerHTML = '<div class="auth-success"><div class="auth-success-icon">&#9888;</div><h2>无效链接</h2><p>重置链接无效</p><div style="margin-top:24px"><button class="btn btn-outline" onclick="navigate(\'auth-login\')">返回登录</button></div></div>';
+    return;
+  }
+  el.innerHTML = `
+    <div class="auth-container">
+      <div class="auth-logo">
+        <h2>重置密码</h2>
+        <p>输入新密码</p>
+      </div>
+      <div class="card">
+        <div class="auth-error" id="reset-error"></div>
+        <div class="form-group">
+          <label class="form-label">新密码</label>
+          <input class="form-input" id="inp-new-password" type="password" placeholder="至少 6 位" autocomplete="new-password">
+        </div>
+        <div class="form-group">
+          <label class="form-label">确认密码</label>
+          <input class="form-input" id="inp-new-password2" type="password" placeholder="再次输入密码" autocomplete="new-password">
+        </div>
+        <button class="btn btn-primary btn-block btn-lg" onclick="doResetPassword()">重置密码</button>
+      </div>
+    </div>`;
+  document.getElementById('inp-new-password').focus();
+}
+
+async function doResetPassword() {
+  const password = document.getElementById('inp-new-password').value;
+  const password2 = document.getElementById('inp-new-password2').value;
+  const errEl = document.getElementById('reset-error');
+  errEl.style.display = 'none';
+  if (!password || password.length < 6) { errEl.textContent = '密码长度至少 6 位'; errEl.style.display = 'block'; return; }
+  if (password !== password2) { errEl.textContent = '两次密码不一致'; errEl.style.display = 'block'; return; }
+  try {
+    const res = await fetch('/api/auth/reset-password', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: viewParams.token, password })
+    });
+    const data = await res.json();
+    if (!res.ok) { errEl.textContent = data.error; errEl.style.display = 'block'; return; }
+    document.getElementById('app').innerHTML = `<div class="auth-success"><div class="auth-success-icon">&#9989;</div><h2>${esc(data.message)}</h2><p>请使用新密码登录</p><div style="margin-top:24px"><button class="btn btn-primary" onclick="navigate('auth-login')">去登录</button></div></div>`;
+  } catch (e) {
+    errEl.textContent = '网络错误，请稍后重试';
+    errEl.style.display = 'block';
+  }
 }
 
 async function renderActivate(el) {
@@ -1397,6 +1500,11 @@ window.addEventListener('scroll', () => {
 
   // Check for activation token in URL
   const urlParams = new URLSearchParams(window.location.search);
+  if (window.location.pathname === '/reset-password' && urlParams.has('token')) {
+    navigate('auth-reset-password', { token: urlParams.get('token') }, false);
+    window.history.replaceState({}, '', '/reset-password');
+    return;
+  }
   if (urlParams.has('token')) {
     navigate('auth-activate', { token: urlParams.get('token') }, false);
     // Clean URL

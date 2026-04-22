@@ -28,10 +28,11 @@ const {
     getWeakDomains, createSubject, getSubjects, getSubjectById,
     updateSubject, deleteSubject, getSubjectQuestionCount,
     createUser, findUserByEmail, findUserByToken, activateUser, getUserById,
+    createPasswordResetToken, findUserByResetToken, resetPassword,
     getAllUsers, setUserDisabled, getUserSubjects,
     exportUserData, restoreUserData
 } = dbModule;
-const { sendActivationEmail } = require('./email');
+const { sendActivationEmail, sendResetPasswordEmail } = require('./email');
 const { generateQuiz } = require('./ai-gen');
 const { exec } = require('child_process');
 const archiver = require('archiver');
@@ -134,6 +135,9 @@ app.get('/activate', (req, res) => {
 app.get('/admin', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
+app.get('/reset-password', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
 
 // ─── Auth Routes (public) ───
 
@@ -190,6 +194,55 @@ app.post('/api/auth/activate', async (req, res) => {
 
     await activateUser(user.id);
     res.json({ success: true, message: '账户激活成功！请登录' });
+});
+
+app.post('/api/auth/forgot-password', async (req, res) => {
+    const { email } = req.body;
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        return res.status(400).json({ error: '请输入有效的邮箱地址' });
+    }
+
+    try {
+        const token = await createPasswordResetToken(email.toLowerCase().trim());
+        if (token) {
+            await sendResetPasswordEmail(email.toLowerCase().trim(), token);
+        }
+        // Always return success to avoid leaking whether email exists
+        res.json({ success: true, message: '如果该邮箱已注册，您将收到密码重置邮件' });
+    } catch (err) {
+        res.status(500).json({ error: '发送失败：' + err.message });
+    }
+});
+
+app.post('/api/auth/reset-password', async (req, res) => {
+    const { token, password } = req.body;
+    if (!token || !password) {
+        return res.status(400).json({ error: '缺少必要参数' });
+    }
+    if (password.length < 6) {
+        return res.status(400).json({ error: '密码长度至少 6 位' });
+    }
+
+    const user = await findUserByResetToken(token);
+    if (!user) {
+        return res.status(400).json({ error: '无效的重置链接' });
+    }
+
+    if (new Date(user.reset_expires_at) < new Date()) {
+        return res.status(400).json({ error: '重置链接已过期，请重新申请' });
+    }
+
+    if (!user.is_active) {
+        return res.status(400).json({ error: '账户未激活，请先激活账户' });
+    }
+
+    try {
+        const hash = await bcrypt.hash(password, 12);
+        await resetPassword(user.id, hash);
+        res.json({ success: true, message: '密码重置成功！请使用新密码登录' });
+    } catch (err) {
+        res.status(500).json({ error: '重置失败：' + err.message });
+    }
 });
 
 app.post('/api/auth/login', async (req, res) => {
