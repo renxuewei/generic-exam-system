@@ -1,5 +1,5 @@
 .env
-quiz.db
+quiz.*
 node_modules
 .git
 inputs

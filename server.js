@@ -16,6 +16,52 @@ const { sendActivationEmail } = require('./email');
 const { generateQuiz } = require('./ai-gen');
 const { exec } = require('child_process');
 
+// ─── SQLite Session Store ───
+class SqliteSessionStore extends session.Store {
+    constructor(db) {
+        super();
+        this.db = db;
+        // Periodically clean expired sessions
+        this._cleanup = setInterval(() => {
+            try {
+                this.db.prepare('DELETE FROM sessions WHERE expired < ?').run(Date.now());
+            } catch {}
+        }, 10 * 60 * 1000); // every 10 min
+    }
+
+    get(sid, callback) {
+        try {
+            const row = this.db.prepare('SELECT sess FROM sessions WHERE sid = ? AND expired > ?').get(sid, Date.now());
+            if (!row) return callback(null, null);
+            callback(null, JSON.parse(row.sess));
+        } catch (err) {
+            callback(err);
+        }
+    }
+
+    set(sid, sess, callback) {
+        try {
+            const maxAge = (sess.cookie && sess.cookie.maxAge) || 30 * 24 * 60 * 60 * 1000;
+            const expired = Date.now() + maxAge;
+            this.db.prepare(
+                'INSERT OR REPLACE INTO sessions (sid, expired, sess) VALUES (?, ?, ?)'
+            ).run(sid, expired, JSON.stringify(sess));
+            callback(null);
+        } catch (err) {
+            callback(err);
+        }
+    }
+
+    destroy(sid, callback) {
+        try {
+            this.db.prepare('DELETE FROM sessions WHERE sid = ?').run(sid);
+            callback(null);
+        } catch (err) {
+            callback(err);
+        }
+    }
+}
+
 function openBrowser(url) {
     const cmd = process.platform === 'win32' ? `start ${url}` : process.platform === 'darwin' ? `open ${url}` : `xdg-open ${url}`;
     exec(cmd);
@@ -28,15 +74,19 @@ let serverInstance = null;
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// ─── Session ───
+// Initialize DB and session middleware before any routes
+initialize();
+const _sessionStore = new SqliteSessionStore(getDB());
 app.use(session({
     secret: process.env.SESSION_SECRET || 'dev-secret-change-me',
     resave: false,
     saveUninitialized: false,
+    store: _sessionStore,
     cookie: {
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
-        maxAge: 30 * 24 * 60 * 60 * 1000  // 30 days
+        maxAge: 30 * 24 * 60 * 60 * 1000,
+        sameSite: process.env.NODE_ENV === 'production' ? 'lax' : undefined
     }
 }));
 
@@ -391,25 +441,16 @@ async function subjectMenu(inquirer) {
 }
 
 async function main() {
-    // 初始化数据库
-    try {
-        initialize();
-        console.log('数据库初始化成功');
-    } catch (err) {
-        console.error('数据库初始化错误:', err.message);
-        // Vercel 上允许继续运行，但会显示警告
-        if (!process.env.VERCEL) {
-            throw err;
-        }
+    // 初始化数据库（已在上面的模块顶层完成，这里仅做日志输出）
+    console.log('数据库初始化成功');
+
+    // Vercel 环境中导出 app，不启动 server
+    if (process.env.VERCEL) {
+        module.exports = app;
+        return;
     }
 
     await startServer();
-
-    // Vercel 环境中不运行交互式菜单
-    if (process.env.VERCEL) {
-        console.log('运行在 Vercel 上，跳过交互式菜单');
-        return;
-    }
 
     console.log(`Web 界面: http://localhost:${PORT}`);
 

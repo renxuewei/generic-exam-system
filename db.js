@@ -83,6 +83,12 @@ function initDB() {
                 created_at TEXT DEFAULT (datetime('now', 'localtime')),
                 subject_id INTEGER REFERENCES subjects(id)
             );
+
+            CREATE TABLE IF NOT EXISTS sessions (
+                sid TEXT PRIMARY KEY,
+                expired INTEGER NOT NULL,
+                sess TEXT NOT NULL
+            );
         `);
 
         // ─── Migration: add user_id to existing tables ───
