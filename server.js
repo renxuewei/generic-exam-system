@@ -248,6 +248,7 @@ function requireAdmin(req, res, next) {
         req.session.isAdmin = true;
         return next();
     }
+    console.log('[ADMIN] Token mismatch. query.length=' + (token||'').length + ' env.length=' + process.env.ADMIN_TOKEN.length + ' envSet=' + !!process.env.ADMIN_TOKEN);
     return res.status(403).json({ error: '无效的管理员令牌', code: 'ADMIN_AUTH_REQUIRED' });
 }
 
