@@ -2,60 +2,82 @@ const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
 
-const DB_PATH = path.join(__dirname, 'quiz.db');
+// 使用可写目录：Vercel 上为 /tmp，本地为当前目录
+const DB_DIR = process.env.VERCEL ? '/tmp' : __dirname;
+const DB_PATH = path.join(DB_DIR, 'quiz.db');
 const INPUTS_DIR = path.join(__dirname, 'inputs');
 let db;
 
 function initDB() {
-    db = new Database(DB_PATH);
-    db.pragma('journal_mode = WAL');
+    // 确保数据库目录存在
+    if (!fs.existsSync(DB_DIR)) {
+        try {
+            fs.mkdirSync(DB_DIR, { recursive: true });
+        } catch (err) {
+            console.warn(`Failed to create DB directory ${DB_DIR}:`, err.message);
+        }
+    }
 
-    db.exec(`
-        CREATE TABLE IF NOT EXISTS _meta (key TEXT PRIMARY KEY, value TEXT);
+    // 创建或打开数据库，添加错误处理
+    try {
+        db = new Database(DB_PATH);
+        db.pragma('journal_mode = WAL');
+    } catch (err) {
+        console.error(`Failed to initialize database at ${DB_PATH}:`, err.message);
+        throw new Error(`Database initialization failed: ${err.message}`);
+    }
 
-        CREATE TABLE IF NOT EXISTS subjects (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL UNIQUE,
-            description TEXT DEFAULT '',
-            quiz_count INTEGER DEFAULT 0,
-            created_at TEXT DEFAULT (datetime('now', 'localtime'))
-        );
+    try {
+        db.exec(`
+            CREATE TABLE IF NOT EXISTS _meta (key TEXT PRIMARY KEY, value TEXT);
 
-        CREATE TABLE IF NOT EXISTS questions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            question_id TEXT NOT NULL,
-            question_json TEXT NOT NULL,
-            source TEXT NOT NULL,
-            domain TEXT,
-            type TEXT,
-            subject_id INTEGER REFERENCES subjects(id)
-        );
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_qid_source
-            ON questions(question_id, source);
+            CREATE TABLE IF NOT EXISTS subjects (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                description TEXT DEFAULT '',
+                quiz_count INTEGER DEFAULT 0,
+                created_at TEXT DEFAULT (datetime('now', 'localtime'))
+            );
 
-        CREATE TABLE IF NOT EXISTS wrong_questions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            question_id TEXT NOT NULL,
-            question_json TEXT NOT NULL,
-            source TEXT NOT NULL,
-            wrong_count INTEGER DEFAULT 1,
-            correct_streak INTEGER DEFAULT 0,
-            created_at TEXT DEFAULT (datetime('now', 'localtime')),
-            subject_id INTEGER REFERENCES subjects(id)
-        );
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_wq_source
-            ON wrong_questions(question_id, source);
+            CREATE TABLE IF NOT EXISTS questions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                question_id TEXT NOT NULL,
+                question_json TEXT NOT NULL,
+                source TEXT NOT NULL,
+                domain TEXT,
+                type TEXT,
+                subject_id INTEGER REFERENCES subjects(id)
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_qid_source
+                ON questions(question_id, source);
 
-        CREATE TABLE IF NOT EXISTS exam_history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            source TEXT NOT NULL,
-            total INTEGER NOT NULL,
-            correct INTEGER NOT NULL,
-            score REAL NOT NULL,
-            created_at TEXT DEFAULT (datetime('now', 'localtime')),
-            subject_id INTEGER REFERENCES subjects(id)
-        );
-    `);
+            CREATE TABLE IF NOT EXISTS wrong_questions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                question_id TEXT NOT NULL,
+                question_json TEXT NOT NULL,
+                source TEXT NOT NULL,
+                wrong_count INTEGER DEFAULT 1,
+                correct_streak INTEGER DEFAULT 0,
+                created_at TEXT DEFAULT (datetime('now', 'localtime')),
+                subject_id INTEGER REFERENCES subjects(id)
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_wq_source
+                ON wrong_questions(question_id, source);
+
+            CREATE TABLE IF NOT EXISTS exam_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source TEXT NOT NULL,
+                total INTEGER NOT NULL,
+                correct INTEGER NOT NULL,
+                score REAL NOT NULL,
+                created_at TEXT DEFAULT (datetime('now', 'localtime')),
+                subject_id INTEGER REFERENCES subjects(id)
+            );
+        `);
+    } catch (err) {
+        console.error('Failed to create database tables:', err.message);
+        throw new Error(`Database schema creation failed: ${err.message}`);
+    }
 
     return db;
 }

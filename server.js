@@ -262,8 +262,26 @@ async function subjectMenu(inquirer) {
 }
 
 async function main() {
-    initialize();
+    // 初始化数据库
+    try {
+        initialize();
+        console.log('数据库初始化成功');
+    } catch (err) {
+        console.error('数据库初始化错误:', err.message);
+        // Vercel 上允许继续运行，但会显示警告
+        if (!process.env.VERCEL) {
+            throw err;
+        }
+    }
+
     await startServer();
+
+    // Vercel 环境中不运行交互式菜单
+    if (process.env.VERCEL) {
+        console.log('运行在 Vercel 上，跳过交互式菜单');
+        return;
+    }
+
     console.log(`Web 界面: http://localhost:${PORT}`);
 
     const inquirer = (await import('inquirer')).default;
@@ -275,6 +293,6 @@ async function main() {
 }
 
 main().catch(err => {
-    console.error(err);
+    console.error('启动失败:', err.message);
     process.exit(1);
 });
