@@ -556,6 +556,14 @@ async function doRegister() {
 
 // ─── Admin Views ───
 
+function adminFetch(url, options = {}) {
+  const headers = options.headers || {};
+  if (sessionStorage.getItem('adminToken')) {
+    headers['X-Admin-Token'] = sessionStorage.getItem('adminToken');
+  }
+  return fetch(url, { ...options, headers });
+}
+
 function renderAdminLogin(el) {
   el.innerHTML = `
     <div class="auth-container">
@@ -581,11 +589,12 @@ async function doAdminLogin() {
   errEl.style.display = 'none';
   if (!token) { errEl.textContent = '请输入令牌'; errEl.style.display = 'block'; return; }
   try {
-    const res = await fetch('/api/admin/users?token=' + encodeURIComponent(token));
+    const res = await fetch('/api/admin/users', { headers: { 'X-Admin-Token': token } });
     if (!res.ok) {
       const data = await res.json();
       errEl.textContent = data.error || '验证失败'; errEl.style.display = 'block'; return;
     }
+    sessionStorage.setItem('adminToken', token);
     currentView = 'admin-users';
     viewParams = {};
     viewHistory = [];
@@ -598,8 +607,8 @@ async function doAdminLogin() {
 async function renderAdminUsers(el) {
   el.innerHTML = '<div class="loading"><div class="spinner"></div><p>加载用户列表...</p></div>';
   try {
-    const res = await fetch('/api/admin/users');
-    if (!res.ok) { currentView = 'admin-login'; render(); return; }
+    const res = await adminFetch('/api/admin/users');
+    if (!res.ok) { sessionStorage.removeItem('adminToken'); currentView = 'admin-login'; render(); return; }
     const users = await res.json();
 
     if (users.length === 0) {
@@ -635,10 +644,10 @@ async function renderAdminUserDetail(el) {
   const { userId } = viewParams;
   el.innerHTML = '<div class="loading"><div class="spinner"></div><p>加载中...</p></div>';
   try {
-    const res = await fetch('/api/admin/users/' + userId + '/subjects');
+    const res = await adminFetch('/api/admin/users/' + userId + '/subjects');
     if (!res.ok) { toast('加载失败'); goBack(); return; }
     const subjects = await res.json();
-    const usersRes = await fetch('/api/admin/users');
+    const usersRes = await adminFetch('/api/admin/users');
     const allUsers = await usersRes.json();
     const user = allUsers.find(u => u.id === userId);
 
@@ -686,7 +695,7 @@ async function doToggleUser(userId, currentlyDisabled) {
   const action = currentlyDisabled ? '启用' : '禁用';
   showConfirm(`确定${action}该用户？${currentlyDisabled ? '' : '用户将无法登录，但所有数据会被保留。'}`, async () => {
     try {
-      const res = await fetch('/api/admin/users/' + userId + '/toggle', { method: 'PUT' });
+      const res = await adminFetch('/api/admin/users/' + userId + '/toggle', { method: 'PUT' });
       if (!res.ok) { const d = await res.json(); toast(d.error); return; }
       toast(`已${action}`);
       render();
@@ -1364,11 +1373,15 @@ window.addEventListener('scroll', () => {
   // Check for admin access
   if (window.location.pathname === '/admin') {
     const urlParams = new URLSearchParams(window.location.search);
-    if (urlParams.has('token')) {
-      // Try with token
+    const tokenFromUrl = urlParams.get('token');
+    const tokenFromStorage = sessionStorage.getItem('adminToken');
+    const token = tokenFromUrl || tokenFromStorage;
+
+    if (token) {
       try {
-        const res = await fetch('/api/admin/users?token=' + encodeURIComponent(urlParams.get('token')));
+        const res = await fetch('/api/admin/users', { headers: { 'X-Admin-Token': token } });
         if (res.ok) {
+          sessionStorage.setItem('adminToken', token);
           window.history.replaceState({}, '', '/admin');
           currentView = 'admin-users';
           viewParams = {};
@@ -1376,20 +1389,7 @@ window.addEventListener('scroll', () => {
           return;
         }
       } catch {}
-      currentView = 'admin-login';
-      render();
-      return;
     }
-    // Check if already admin via session
-    try {
-      const res = await fetch('/api/admin/users');
-      if (res.ok) {
-        currentView = 'admin-users';
-        viewParams = {};
-        render();
-        return;
-      }
-    } catch {}
     currentView = 'admin-login';
     render();
     return;
