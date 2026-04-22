@@ -271,7 +271,10 @@ app.post('/api/auth/login', async (req, res) => {
 
     req.session.userId = user.id;
     req.session.email = user.email;
-    res.json({ success: true, user: { id: user.id, email: user.email } });
+    req.session.save((err) => {
+        if (err) return res.status(500).json({ error: '会话保存失败' });
+        res.json({ success: true, user: { id: user.id, email: user.email } });
+    });
 });
 
 app.post('/api/auth/logout', (req, res) => {
