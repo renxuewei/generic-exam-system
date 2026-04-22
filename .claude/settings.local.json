@@ -13,7 +13,10 @@
       "Bash(curl -s http://localhost:3000/api/subjects)",
       "Bash(node:*)",
       "Bash(npm install:*)",
-      "Bash(VERCEL=1 node -e \":*)"
+      "Bash(VERCEL=1 node -e \":*)",
+      "Bash(ADMIN_TOKEN=test123 node -e \":*)",
+      "Bash(grep -v \"^\\\\s*$\\\\|Web\\\\|数据库\\\\|选择\\\\|创建\\\\|学科\\\\|─\\\\|❯\\\\|AWS\\\\|初级\\\\|初三\\\\|外研\")",
+      "Bash(node -e \":*)"
     ]
   }
 }

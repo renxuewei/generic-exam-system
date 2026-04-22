@@ -129,6 +129,11 @@ function runMigration() {
         db.prepare('ALTER TABLE exam_history ADD COLUMN user_id INTEGER DEFAULT 1').run();
     }
 
+    // Add is_disabled to users
+    if (!columnExists('users', 'is_disabled')) {
+        db.prepare('ALTER TABLE users ADD COLUMN is_disabled INTEGER DEFAULT 0').run();
+    }
+
     // Recreate composite indexes with user_id
     db.exec(`
         DROP INDEX IF EXISTS idx_qid_source;
@@ -597,6 +602,133 @@ function getWeakDomains(userId, subjectId) {
     return result;
 }
 
+// ─── Admin Functions ───
+
+function getAllUsers() {
+    return db.prepare(`
+        SELECT u.id, u.email, u.is_active, u.is_disabled, u.created_at,
+            (SELECT COUNT(*) FROM subjects WHERE user_id = u.id) as subject_count,
+            (SELECT COUNT(*) FROM questions WHERE user_id = u.id) as question_count
+        FROM users u
+        WHERE u.id != 1
+        ORDER BY u.id DESC
+    `).all();
+}
+
+function setUserDisabled(userId, disabled) {
+    db.prepare('UPDATE users SET is_disabled = ? WHERE id = ?').run(disabled ? 1 : 0, userId);
+}
+
+function getUserSubjects(userId) {
+    const subjects = db.prepare('SELECT id, name, description, quiz_count FROM subjects WHERE user_id = ? ORDER BY id').all(userId);
+    return subjects.map(s => ({
+        ...s,
+        question_count: getSubjectQuestionCount(userId, s.id),
+        wrong_count: getWrongCount(userId, s.id)
+    }));
+}
+
+// ─── Backup / Restore ───
+
+function exportUserData(userId) {
+    const subjects = db.prepare('SELECT id, name, description, quiz_count FROM subjects WHERE user_id = ? ORDER BY id').all(userId);
+
+    const subjectIdMap = {};
+    for (const s of subjects) {
+        subjectIdMap[s.id] = s.name;
+    }
+
+    const questions = db.prepare(
+        'SELECT question_id, question_json, source, domain, type, subject_id FROM questions WHERE user_id = ?'
+    ).all(userId);
+
+    const wrongQuestions = db.prepare(
+        'SELECT question_id, question_json, source, wrong_count, correct_streak, subject_id FROM wrong_questions WHERE user_id = ?'
+    ).all(userId);
+
+    const examHistory = db.prepare(
+        'SELECT source, total, correct, score, subject_id FROM exam_history WHERE user_id = ?'
+    ).all(userId);
+
+    return {
+        manifest: { exportedAt: new Date().toISOString(), version: 1, subjectIdMap },
+        subjects,
+        questions,
+        wrong_questions: wrongQuestions,
+        exam_history: examHistory
+    };
+}
+
+function restoreUserData(userId, data) {
+    const { manifest, subjects, questions, wrong_questions, exam_history } = data;
+    if (!manifest || !manifest.version || !subjects) {
+        throw new Error('无效的备份文件格式');
+    }
+
+    const importMany = db.transaction(() => {
+        // Phase 1: Create or find subjects, build ID mapping
+        const idMapping = {};
+        for (const s of subjects) {
+            const existing = db.prepare('SELECT id FROM subjects WHERE name = ? AND user_id = ?').get(s.name, userId);
+            if (existing) {
+                idMapping[s.id] = existing.id;
+            } else {
+                const result = db.prepare(
+                    'INSERT INTO subjects (name, description, quiz_count, user_id) VALUES (?, ?, ?, ?)'
+                ).run(s.name, s.description || '', s.quiz_count || 0, userId);
+                idMapping[s.id] = result.lastInsertRowid;
+            }
+        }
+
+        // Phase 2: Import questions
+        const insertQ = db.prepare(
+            'INSERT OR REPLACE INTO questions (question_id, question_json, source, domain, type, subject_id, user_id) VALUES (?, ?, ?, ?, ?, ?, ?)'
+        );
+        if (questions && questions.length > 0) {
+            for (const q of questions) {
+                insertQ.run(q.question_id, q.question_json, q.source, q.domain || '', q.type || '', idMapping[q.subject_id] || null, userId);
+            }
+        }
+
+        // Phase 3: Import wrong questions (UPSERT)
+        if (wrong_questions && wrong_questions.length > 0) {
+            for (const wq of wrong_questions) {
+                const existing = db.prepare(
+                    'SELECT id, wrong_count FROM wrong_questions WHERE question_id = ? AND source = ? AND user_id = ?'
+                ).get(wq.question_id, wq.source, userId);
+                if (existing) {
+                    db.prepare(
+                        'UPDATE wrong_questions SET question_json = ?, subject_id = ? WHERE id = ?'
+                    ).run(wq.question_json, idMapping[wq.subject_id] || null, existing.id);
+                } else {
+                    db.prepare(
+                        'INSERT INTO wrong_questions (question_id, question_json, source, subject_id, user_id) VALUES (?, ?, ?, ?, ?)'
+                    ).run(wq.question_id, wq.question_json, wq.source, idMapping[wq.subject_id] || null, userId);
+                }
+            }
+        }
+
+        // Phase 4: Import exam history
+        const insertH = db.prepare(
+            'INSERT INTO exam_history (source, total, correct, score, subject_id, user_id) VALUES (?, ?, ?, ?, ?, ?)'
+        );
+        if (exam_history && exam_history.length > 0) {
+            for (const h of exam_history) {
+                insertH.run(h.source, h.total, h.correct, h.score, idMapping[h.subject_id] || null, userId);
+            }
+        }
+    });
+
+    importMany();
+
+    return {
+        subjects: subjects.length,
+        questions: (questions || []).length,
+        wrong_questions: (wrong_questions || []).length,
+        exam_history: (exam_history || []).length
+    };
+}
+
 module.exports = {
     initDB,
     initialize,
@@ -630,5 +762,12 @@ module.exports = {
     findUserByEmail,
     findUserByToken,
     activateUser,
-    getUserById
+    getUserById,
+    // Admin
+    getAllUsers,
+    setUserDisabled,
+    getUserSubjects,
+    // Backup/Restore
+    exportUserData,
+    restoreUserData
 };

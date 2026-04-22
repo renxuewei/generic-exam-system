@@ -4,17 +4,38 @@ const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
+
+// Load .env file into process.env (no dotenv dependency needed)
+const envPath = path.join(__dirname, '.env');
+if (fs.existsSync(envPath)) {
+    fs.readFileSync(envPath, 'utf-8').split('\n').forEach(line => {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#')) return;
+        const eq = trimmed.indexOf('=');
+        if (eq > 0) {
+            const key = trimmed.slice(0, eq).trim();
+            const val = trimmed.slice(eq + 1).trim();
+            if (!(key in process.env)) process.env[key] = val;
+        }
+    });
+}
 const {
     initialize, getQuestionsBySubject, getRandomQuestions, getSources, insertQuestions,
     importQuizFromJSON, upsertWrongQuestion, getRandomWrongQuestions,
     markCorrect, markWrong, getWrongCount, saveExamHistory, getProgress,
     getWeakDomains, createSubject, getSubjects, getSubjectById,
     updateSubject, deleteSubject, getSubjectQuestionCount, getDB,
-    createUser, findUserByEmail, findUserByToken, activateUser, getUserById
+    createUser, findUserByEmail, findUserByToken, activateUser, getUserById,
+    getAllUsers, setUserDisabled, getUserSubjects,
+    exportUserData, restoreUserData
 } = require('./db');
 const { sendActivationEmail } = require('./email');
 const { generateQuiz } = require('./ai-gen');
 const { exec } = require('child_process');
+const archiver = require('archiver');
+const AdmZip = require('adm-zip');
+const multer = require('multer');
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
 // ─── SQLite Session Store ───
 class SqliteSessionStore extends session.Store {
@@ -103,6 +124,9 @@ app.get('/review', (req, res) => {
 app.get('/activate', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
+app.get('/admin', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
 
 // ─── Auth Routes (public) ───
 
@@ -181,6 +205,10 @@ app.post('/api/auth/login', async (req, res) => {
         return res.status(403).json({ error: '账户未激活，请查收激活邮件' });
     }
 
+    if (user.is_disabled) {
+        return res.status(403).json({ error: '账户已被禁用，请联系管理员' });
+    }
+
     req.session.userId = user.id;
     req.session.email = user.email;
     res.json({ success: true, user: { id: user.id, email: user.email } });
@@ -209,6 +237,49 @@ function requireAuth(req, res, next) {
     req.userId = req.session.userId;
     next();
 }
+
+function requireAdmin(req, res, next) {
+    if (!process.env.ADMIN_TOKEN) {
+        return res.status(404).json({ error: '管理功能未启用' });
+    }
+    if (req.session.isAdmin) return next();
+    const token = req.query.token || req.headers['x-admin-token'];
+    if (token === process.env.ADMIN_TOKEN) {
+        req.session.isAdmin = true;
+        return next();
+    }
+    return res.status(403).json({ error: '无效的管理员令牌', code: 'ADMIN_AUTH_REQUIRED' });
+}
+
+// ─── Admin Routes (before global requireAuth) ───
+
+app.get('/api/admin/users', requireAdmin, (req, res) => {
+    res.json(getAllUsers());
+});
+
+app.put('/api/admin/users/:id/toggle', requireAdmin, (req, res) => {
+    const userId = parseInt(req.params.id);
+    if (userId === 1) return res.status(400).json({ error: '不能操作系统账户' });
+    const users = getAllUsers();
+    const user = users.find(u => u.id === userId);
+    if (!user) return res.status(404).json({ error: '用户不存在' });
+    setUserDisabled(userId, !user.is_disabled);
+    res.json({ success: true, is_disabled: !user.is_disabled });
+});
+
+app.get('/api/admin/users/:id/subjects', requireAdmin, (req, res) => {
+    const userId = parseInt(req.params.id);
+    try {
+        const subjects = getUserSubjects(userId);
+        const enriched = subjects.map(s => {
+            const progress = getProgress(userId, s.id);
+            return { ...s, progress: progress.summary || null };
+        });
+        res.json(enriched);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
 
 // All API routes below require auth
 app.use('/api', requireAuth);
@@ -345,6 +416,50 @@ app.post('/api/aigen', async (req, res) => {
         res.json({ success: true, count: quizData.length, source });
     } catch (err) {
         res.status(500).json({ error: err.message });
+    }
+});
+
+// ─── Backup / Restore APIs ───
+
+app.get('/api/backup/export', (req, res) => {
+    try {
+        const data = exportUserData(req.userId);
+        res.setHeader('Content-Type', 'application/zip');
+        res.setHeader('Content-Disposition', 'attachment; filename=quiz-backup-' + new Date().toISOString().slice(0, 10) + '.zip');
+        const archive = archiver('zip', { zlib: { level: 9 } });
+        archive.pipe(res);
+        archive.append(JSON.stringify(data.manifest, null, 2), { name: 'manifest.json' });
+        archive.append(JSON.stringify(data.subjects, null, 2), { name: 'subjects.json' });
+        archive.append(JSON.stringify(data.questions, null, 2), { name: 'questions.json' });
+        archive.append(JSON.stringify(data.wrong_questions, null, 2), { name: 'wrong_questions.json' });
+        archive.append(JSON.stringify(data.exam_history, null, 2), { name: 'exam_history.json' });
+        archive.finalize();
+        archive.on('error', (err) => {
+            console.error('Backup error:', err);
+            if (!res.headersSent) res.status(500).json({ error: '备份失败' });
+        });
+    } catch (err) {
+        res.status(500).json({ error: '备份失败: ' + err.message });
+    }
+});
+
+app.post('/api/backup/restore', upload.single('file'), (req, res) => {
+    if (!req.file) return res.status(400).json({ error: '请选择备份文件' });
+    try {
+        const zip = new AdmZip(req.file.buffer);
+        const fileNames = zip.getEntries().map(e => e.entryName);
+        if (!fileNames.includes('manifest.json') || !fileNames.includes('subjects.json')) {
+            return res.status(400).json({ error: '无效的备份文件：缺少必要文件' });
+        }
+        const manifest = JSON.parse(zip.readAsText('manifest.json'));
+        const subjects = JSON.parse(zip.readAsText('subjects.json'));
+        const questions = fileNames.includes('questions.json') ? JSON.parse(zip.readAsText('questions.json')) : [];
+        const wrongQuestions = fileNames.includes('wrong_questions.json') ? JSON.parse(zip.readAsText('wrong_questions.json')) : [];
+        const examHistory = fileNames.includes('exam_history.json') ? JSON.parse(zip.readAsText('exam_history.json')) : [];
+        const result = restoreUserData(req.userId, { manifest, subjects, questions, wrong_questions: wrongQuestions, exam_history: examHistory });
+        res.json({ success: true, ...result });
+    } catch (err) {
+        res.status(400).json({ error: '恢复失败: ' + err.message });
     }
 });
 

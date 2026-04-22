@@ -171,6 +171,23 @@ textarea.form-input{resize:vertical;min-height:80px;font-family:inherit}
 .auth-success-icon{font-size:64px;margin-bottom:16px}
 .auth-success h2{font-size:20px;margin-bottom:8px}
 .auth-success p{font-size:14px;color:var(--text2);line-height:1.6}
+
+/* Admin */
+.admin-user-item{display:flex;align-items:center;gap:12px;padding:14px 16px;background:var(--card);border-radius:12px;margin-bottom:10px;box-shadow:0 1px 4px rgba(0,0,0,.06);cursor:pointer;transition:all .15s}
+.admin-user-item:active{transform:scale(.98)}
+.admin-user-item.disabled{opacity:.5}
+.admin-user-info{flex:1;min-width:0}
+.admin-user-email{font-size:15px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.admin-user-meta{font-size:12px;color:var(--text2);margin-top:2px}
+.admin-badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700}
+.admin-badge.active{background:#e6f4ea;color:var(--success)}
+.admin-badge.disabled{background:#fce8e6;color:var(--danger)}
+.admin-badge.inactive{background:#fffbe6;color:#e17055}
+
+/* Backup */
+.file-upload-area{border:2px dashed var(--border);border-radius:12px;padding:32px 20px;text-align:center;cursor:pointer;transition:all .15s}
+.file-upload-area:hover{border-color:var(--primary);background:var(--primary-light)}
+.file-upload-area.dragover{border-color:var(--primary);background:var(--primary-light)}
 </style>
 </head>
 <body>
@@ -240,6 +257,7 @@ async function doLogout() {
 
 // ─── Router ───
 const PUBLIC_VIEWS = ['auth-login', 'auth-register', 'auth-activate', 'auth-pending'];
+const ADMIN_VIEWS = ['admin-login', 'admin-users', 'admin-user-detail'];
 
 function navigate(view, params = {}, pushHistory = true) {
   if (pushHistory && currentView !== view) {
@@ -278,7 +296,7 @@ function render() {
   logoutBtn.style.visibility = 'hidden';
 
   // Route guard
-  if (!currentUser && !PUBLIC_VIEWS.includes(currentView)) {
+  if (!currentUser && !PUBLIC_VIEWS.includes(currentView) && !ADMIN_VIEWS.includes(currentView) && currentView !== 'backup') {
     currentView = 'auth-login';
     viewParams = {};
   }
@@ -290,6 +308,11 @@ function render() {
   // Show logout button when logged in
   if (currentUser) {
     logoutBtn.style.visibility = 'visible';
+  }
+
+  // Hide logout for admin views
+  if (ADMIN_VIEWS.includes(currentView)) {
+    logoutBtn.style.visibility = 'hidden';
   }
 
   switch (currentView) {
@@ -317,6 +340,7 @@ function render() {
       backBtn.style.visibility = 'hidden';
       headerTitle.textContent = '题库系统';
       fab.style.display = 'flex';
+      headerAction.style.visibility = 'visible';
       renderSubjects(app);
       break;
     case 'create-subject':
@@ -362,6 +386,26 @@ function render() {
       headerTitle.textContent = 'AI 生成';
       fab.style.display = 'none';
       renderAIGen(app);
+      break;
+    case 'admin-login':
+      backBtn.style.visibility = 'hidden';
+      headerTitle.textContent = '管理员验证';
+      renderAdminLogin(app);
+      break;
+    case 'admin-users':
+      backBtn.style.visibility = 'hidden';
+      headerTitle.textContent = '用户管理';
+      renderAdminUsers(app);
+      break;
+    case 'admin-user-detail':
+      backBtn.style.visibility = 'visible';
+      renderAdminUserDetail(app);
+      break;
+    case 'backup':
+      backBtn.style.visibility = 'visible';
+      headerTitle.textContent = '数据备份';
+      fab.style.display = 'none';
+      renderBackup(app);
       break;
   }
 }
@@ -508,6 +552,229 @@ async function doRegister() {
     errEl.textContent = '网络错误，请稍后重试';
     errEl.style.display = 'block';
   }
+}
+
+// ─── Admin Views ───
+
+function renderAdminLogin(el) {
+  el.innerHTML = `
+    <div class="auth-container">
+      <div class="auth-logo">
+        <h2>管理员验证</h2>
+        <p>请输入管理员令牌</p>
+      </div>
+      <div class="card">
+        <div class="auth-error" id="admin-error"></div>
+        <div class="form-group">
+          <label class="form-label">管理令牌</label>
+          <input class="form-input" id="inp-admin-token" type="password" placeholder="输入 ADMIN_TOKEN">
+        </div>
+        <button class="btn btn-primary btn-block btn-lg" onclick="doAdminLogin()">验证</button>
+      </div>
+    </div>`;
+  document.getElementById('inp-admin-token').focus();
+}
+
+async function doAdminLogin() {
+  const token = document.getElementById('inp-admin-token').value.trim();
+  const errEl = document.getElementById('admin-error');
+  errEl.style.display = 'none';
+  if (!token) { errEl.textContent = '请输入令牌'; errEl.style.display = 'block'; return; }
+  try {
+    const res = await fetch('/api/admin/users?token=' + encodeURIComponent(token));
+    if (!res.ok) {
+      const data = await res.json();
+      errEl.textContent = data.error || '验证失败'; errEl.style.display = 'block'; return;
+    }
+    currentView = 'admin-users';
+    viewParams = {};
+    viewHistory = [];
+    render();
+  } catch (e) {
+    errEl.textContent = '网络错误'; errEl.style.display = 'block';
+  }
+}
+
+async function renderAdminUsers(el) {
+  el.innerHTML = '<div class="loading"><div class="spinner"></div><p>加载用户列表...</p></div>';
+  try {
+    const res = await fetch('/api/admin/users');
+    if (!res.ok) { currentView = 'admin-login'; render(); return; }
+    const users = await res.json();
+
+    if (users.length === 0) {
+      el.innerHTML = '<div class="empty"><div class="empty-icon">&#128100;</div><div class="empty-text">暂无注册用户</div></div>';
+      return;
+    }
+
+    let html = `<div style="margin-bottom:12px;font-size:14px;color:var(--text2)">共 ${users.length} 个用户</div>`;
+    for (const u of users) {
+      const badge = u.is_disabled
+        ? '<span class="admin-badge disabled">已禁用</span>'
+        : u.is_active
+          ? '<span class="admin-badge active">活跃</span>'
+          : '<span class="admin-badge inactive">未激活</span>';
+      html += `
+        <div class="admin-user-item ${u.is_disabled ? 'disabled' : ''}" onclick="navigate('admin-user-detail',{userId:${u.id}})">
+          <div class="admin-user-info">
+            <div class="admin-user-email">${esc(u.email)} ${badge}</div>
+            <div class="admin-user-meta">
+              ${u.subject_count} 学科 &middot; ${u.question_count} 题目 &middot; 注册于 ${u.created_at ? u.created_at.slice(0, 10) : '未知'}
+            </div>
+          </div>
+          <div class="subject-arrow">&#8250;</div>
+        </div>`;
+    }
+    el.innerHTML = html;
+  } catch (e) {
+    el.innerHTML = '<div class="empty"><div class="empty-text">加载失败</div></div>';
+  }
+}
+
+async function renderAdminUserDetail(el) {
+  const { userId } = viewParams;
+  el.innerHTML = '<div class="loading"><div class="spinner"></div><p>加载中...</p></div>';
+  try {
+    const res = await fetch('/api/admin/users/' + userId + '/subjects');
+    if (!res.ok) { toast('加载失败'); goBack(); return; }
+    const subjects = await res.json();
+    const usersRes = await fetch('/api/admin/users');
+    const allUsers = await usersRes.json();
+    const user = allUsers.find(u => u.id === userId);
+
+    let html = `
+      <div class="card" style="margin-bottom:16px">
+        <div class="card-title">${esc(user ? user.email : '用户 #' + userId)}</div>
+        <div style="margin-top:8px">
+          <button class="btn btn-sm ${user && user.is_disabled ? 'btn-success' : 'btn-danger'}"
+                  onclick="doToggleUser(${userId}, ${user && user.is_disabled})">
+            ${user && user.is_disabled ? '启用用户' : '禁用用户'}
+          </button>
+        </div>
+      </div>
+      <div class="card-title" style="margin-bottom:12px">学科数据</div>`;
+
+    if (subjects.length === 0) {
+      html += '<div class="empty"><div class="empty-text">该用户暂无学科</div></div>';
+    } else {
+      for (const s of subjects) {
+        const trendText = s.progress
+          ? (s.progress.trend === '上升' ? '&#128200;' : s.progress.trend === '下降' ? '&#128201;' : '&#10132;') + ' ' + s.progress.trend + ' ' + s.progress.overallAvg.toFixed(1) + '分'
+          : '暂无数据';
+        html += `
+          <div class="card" style="margin-bottom:8px">
+            <div class="card-header">
+              <div class="card-title">${esc(s.name)}</div>
+              <div style="font-size:13px;color:var(--text2)">${trendText}</div>
+            </div>
+            <div class="subject-stats">
+              <span class="subject-stat"><strong>${s.question_count}</strong> 题</span>
+              <span class="subject-stat"><strong>${s.wrong_count}</strong> 错题</span>
+              <span class="subject-stat">${s.quiz_count || 0} 次/组</span>
+            </div>
+          </div>`;
+      }
+    }
+    el.innerHTML = html;
+    document.getElementById('header-title').textContent = user ? user.email : '用户详情';
+  } catch (e) {
+    el.innerHTML = '<div class="empty"><div class="empty-text">加载失败</div></div>';
+  }
+}
+
+async function doToggleUser(userId, currentlyDisabled) {
+  const action = currentlyDisabled ? '启用' : '禁用';
+  showConfirm(`确定${action}该用户？${currentlyDisabled ? '' : '用户将无法登录，但所有数据会被保留。'}`, async () => {
+    try {
+      const res = await fetch('/api/admin/users/' + userId + '/toggle', { method: 'PUT' });
+      if (!res.ok) { const d = await res.json(); toast(d.error); return; }
+      toast(`已${action}`);
+      render();
+    } catch (e) {
+      toast('操作失败');
+    }
+  });
+}
+
+// ─── Backup / Restore ───
+
+let restoreFileBuffer = null;
+
+function renderBackup(el) {
+  restoreFileBuffer = null;
+  el.innerHTML = `
+    <div class="card">
+      <div class="card-title">数据备份</div>
+      <p style="font-size:13px;color:var(--text2);margin:8px 0 16px">下载您所有学科、题目、错题和考试记录。不包含账户信息。</p>
+      <button class="btn btn-primary btn-block" id="btn-backup" onclick="doBackup()">下载备份 (ZIP)</button>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <div class="card-title">数据恢复</div>
+      <p style="font-size:13px;color:var(--text2);margin:8px 0 16px">上传之前下载的 ZIP 备份文件。同名学科的数据将被覆盖，新学科将被创建。</p>
+      <div class="file-upload-area" id="file-upload-area" onclick="document.getElementById('restore-file').click()"
+           ondragover="event.preventDefault();this.classList.add('dragover')"
+           ondragleave="this.classList.remove('dragover')"
+           ondrop="event.preventDefault();this.classList.remove('dragover');handleRestoreFile(event.dataTransfer.files[0])">
+        <div style="font-size:32px;margin-bottom:8px">&#128194;</div>
+        <div style="font-size:14px;color:var(--text)">点击或拖拽 ZIP 文件到此处</div>
+        <div style="font-size:12px;color:var(--text2);margin-top:4px" id="file-name-display"></div>
+      </div>
+      <input type="file" id="restore-file" accept=".zip" style="display:none" onchange="handleRestoreFile(this.files[0])">
+      <button class="btn btn-success btn-block" id="btn-restore" style="margin-top:12px;display:none" onclick="doRestore()">恢复数据</button>
+    </div>`;
+}
+
+async function doBackup() {
+  const btn = document.getElementById('btn-backup');
+  btn.disabled = true;
+  btn.textContent = '正在生成备份...';
+  try {
+    const res = await apiFetch('/api/backup/export');
+    if (!res.ok) { toast('备份失败'); btn.disabled = false; btn.textContent = '下载备份 (ZIP)'; return; }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'quiz-backup-' + new Date().toISOString().slice(0, 10) + '.zip';
+    a.click();
+    URL.revokeObjectURL(url);
+    toast('备份下载成功');
+  } catch (e) {
+    toast('备份失败: ' + e.message);
+  }
+  btn.disabled = false;
+  btn.textContent = '下载备份 (ZIP)';
+}
+
+function handleRestoreFile(file) {
+  if (!file || !file.name.endsWith('.zip')) { toast('请选择 ZIP 文件'); return; }
+  restoreFileBuffer = file;
+  document.getElementById('file-name-display').textContent = file.name + ' (' + (file.size / 1024).toFixed(1) + ' KB)';
+  document.getElementById('btn-restore').style.display = 'block';
+}
+
+async function doRestore() {
+  if (!restoreFileBuffer) return;
+  showConfirm('确定恢复备份？同名学科的数据将被覆盖。', async () => {
+    const btn = document.getElementById('btn-restore');
+    btn.disabled = true;
+    btn.textContent = '正在恢复...';
+    try {
+      const formData = new FormData();
+      formData.append('file', restoreFileBuffer);
+      const res = await apiFetch('/api/backup/restore', { method: 'POST', body: formData });
+      const data = await res.json();
+      if (!res.ok) { toast(data.error || '恢复失败'); btn.disabled = false; btn.textContent = '恢复数据'; return; }
+      toast(`恢复成功: ${data.subjects} 学科, ${data.questions} 题目, ${data.wrong_questions} 错题, ${data.exam_history} 记录`);
+      restoreFileBuffer = null;
+      document.getElementById('file-name-display').textContent = '';
+      btn.style.display = 'none';
+    } catch (e) {
+      toast('恢复失败: ' + e.message);
+    }
+    btn.disabled = false;
+    btn.textContent = '恢复数据';
+  });
 }
 
 // ─── Views ───
@@ -1075,6 +1342,8 @@ function fabAction() {
 function headerAction() {
   if (currentView === 'dashboard') {
     navigate('edit-subject', { subjectId: viewParams.subjectId, subject: viewParams.subject });
+  } else if (currentView === 'subjects') {
+    navigate('backup');
   }
 }
 
@@ -1092,6 +1361,40 @@ window.addEventListener('scroll', () => {
 
 // ─── Init ───
 (async function init() {
+  // Check for admin access
+  if (window.location.pathname === '/admin') {
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.has('token')) {
+      // Try with token
+      try {
+        const res = await fetch('/api/admin/users?token=' + encodeURIComponent(urlParams.get('token')));
+        if (res.ok) {
+          window.history.replaceState({}, '', '/admin');
+          currentView = 'admin-users';
+          viewParams = {};
+          render();
+          return;
+        }
+      } catch {}
+      currentView = 'admin-login';
+      render();
+      return;
+    }
+    // Check if already admin via session
+    try {
+      const res = await fetch('/api/admin/users');
+      if (res.ok) {
+        currentView = 'admin-users';
+        viewParams = {};
+        render();
+        return;
+      }
+    } catch {}
+    currentView = 'admin-login';
+    render();
+    return;
+  }
+
   // Check for activation token in URL
   const urlParams = new URLSearchParams(window.location.search);
   if (urlParams.has('token')) {
