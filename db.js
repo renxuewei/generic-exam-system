@@ -11,9 +11,9 @@ let db;
  * Uses TURSO_DATABASE_URL for cloud, falls back to local file.
  */
 function createDbClient() {
-    const url = process.env.TURSO_DATABASE_URL;
-    if (url) {
-        db = createClient({ url, authToken: process.env.TURSO_AUTH_TOKEN });
+    const provider = process.env.DB_PROVIDER || 'sqlite';
+    if (provider === 'turso' && process.env.TURSO_DATABASE_URL) {
+        db = createClient({ url: process.env.TURSO_DATABASE_URL, authToken: process.env.TURSO_AUTH_TOKEN });
     } else {
         db = createClient({ url: 'file:' + path.join(__dirname, 'quiz.db') });
     }
@@ -71,6 +71,13 @@ async function initDB() {
                 score REAL NOT NULL,
                 created_at TEXT DEFAULT (datetime('now', 'localtime')),
                 subject_id INTEGER REFERENCES subjects(id)
+            )` },
+            { sql: `CREATE TABLE IF NOT EXISTS question_usage (
+                question_id TEXT NOT NULL,
+                subject_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                used_at TEXT DEFAULT (datetime('now', 'localtime')),
+                PRIMARY KEY (question_id, subject_id, user_id)
             )` },
             { sql: `CREATE TABLE IF NOT EXISTS sessions (
                 sid TEXT PRIMARY KEY,
@@ -134,6 +141,17 @@ async function runMigration() {
         { sql: 'CREATE UNIQUE INDEX IF NOT EXISTS idx_wq_source_user ON wrong_questions(question_id, source, user_id)' },
         { sql: 'CREATE UNIQUE INDEX IF NOT EXISTS idx_subject_user_name ON subjects(user_id, name)' },
     ]);
+
+    // question_usage table (new installations already have it from initDB)
+    if (!(await tableExists('question_usage'))) {
+        await db.execute(`CREATE TABLE IF NOT EXISTS question_usage (
+            question_id TEXT NOT NULL,
+            subject_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            used_at TEXT DEFAULT (datetime('now', 'localtime')),
+            PRIMARY KEY (question_id, subject_id, user_id)
+        )`);
+    }
 }
 
 /**
@@ -141,6 +159,11 @@ async function runMigration() {
  */
 async function columnExists(tableName, columnName) {
     const result = await db.execute(`SELECT count(*) as cnt FROM pragma_table_info('${tableName}') WHERE name = '${columnName}'`);
+    return result.rows[0].cnt > 0;
+}
+
+async function tableExists(tableName) {
+    const result = await db.execute(`SELECT count(*) as cnt FROM sqlite_master WHERE type='table' AND name='${tableName}'`);
     return result.rows[0].cnt > 0;
 }
 
@@ -235,14 +258,52 @@ async function getQuestionsBySubject(userId, subjectId) {
 
 /**
  * Get random N questions for a subject. If count is 0, return all.
+ * Priority: never-used questions first, then oldest-used.
  */
 async function getRandomQuestions(userId, subjectId, count) {
     if (!count || count <= 0) return getQuestionsBySubject(userId, subjectId);
-    const result = await db.execute(
-        'SELECT * FROM questions WHERE subject_id = ? AND user_id = ? ORDER BY RANDOM() LIMIT ?',
-        [subjectId, userId, count]
+
+    // 1. Try to get enough never-used questions
+    const unused = await db.execute(
+        `SELECT q.* FROM questions q
+         WHERE q.subject_id = ? AND q.user_id = ?
+           AND NOT EXISTS (
+               SELECT 1 FROM question_usage u
+               WHERE u.question_id = q.question_id AND u.subject_id = ? AND u.user_id = ?
+           )
+         ORDER BY RANDOM() LIMIT ?`,
+        [subjectId, userId, subjectId, userId, count]
     );
-    return result.rows.map(r => JSON.parse(r.question_json));
+
+    if (unused.rows.length >= count) {
+        return unused.rows.map(r => JSON.parse(r.question_json));
+    }
+
+    // 2. Not enough unused — fill the rest from oldest-used
+    const usedNeeded = count - unused.rows.length;
+    const usedIds = unused.rows.map(r => r.question_id);
+    const placeholders = usedIds.map(() => '?').join(',');
+
+    let used;
+    if (usedIds.length > 0) {
+        used = await db.execute(
+            `SELECT q.* FROM questions q
+             INNER JOIN question_usage u ON u.question_id = q.question_id AND u.subject_id = q.subject_id AND u.user_id = q.user_id
+             WHERE q.subject_id = ? AND q.user_id = ? AND q.question_id NOT IN (${placeholders})
+             ORDER BY u.used_at ASC LIMIT ?`,
+            [subjectId, userId, ...usedIds, usedNeeded]
+        );
+    } else {
+        used = await db.execute(
+            `SELECT q.* FROM questions q
+             INNER JOIN question_usage u ON u.question_id = q.question_id AND u.subject_id = q.subject_id AND u.user_id = q.user_id
+             WHERE q.subject_id = ? AND q.user_id = ?
+             ORDER BY u.used_at ASC LIMIT ?`,
+            [subjectId, userId, usedNeeded]
+        );
+    }
+
+    return [...unused.rows, ...used.rows].map(r => JSON.parse(r.question_json));
 }
 
 /**
@@ -461,6 +522,19 @@ function getDB() {
 }
 
 // ─── Wrong Questions ───
+
+async function recordQuestionUsage(userId, questionIds, subjectId) {
+    if (!questionIds || questionIds.length === 0) return;
+    const now = new Date().toISOString().replace('T', ' ').slice(0, 19);
+    await db.batch(
+        questionIds.map(qid => ({
+            sql: `INSERT INTO question_usage (question_id, subject_id, user_id, used_at)
+                  VALUES (?, ?, ?, ?)
+                  ON CONFLICT(question_id, subject_id, user_id) DO UPDATE SET used_at = excluded.used_at`,
+            args: [String(qid), subjectId, userId, now]
+        }))
+    );
+}
 
 async function upsertWrongQuestion(userId, questionId, questionJson, source, subjectId) {
     const existing = await db.execute(
@@ -856,6 +930,7 @@ module.exports = {
     getSources,
     insertQuestions,
     importQuizFromJSON,
+    recordQuestionUsage,
     upsertWrongQuestion,
     getWrongQuestionsBySource,
     getWrongQuestionsBySubject,

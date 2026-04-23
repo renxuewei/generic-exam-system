@@ -23,7 +23,7 @@ const dbModule = require('./db');
 const {
     createDbClient, initialize, getClient, getDB,
     getQuestionsBySubject, getRandomQuestions, getSources, insertQuestions,
-    importQuizFromJSON, upsertWrongQuestion, getRandomWrongQuestions,
+    importQuizFromJSON, upsertWrongQuestion, recordQuestionUsage, getRandomWrongQuestions,
     markCorrect, markWrong, getWrongCount, saveExamHistory, getProgress,
     getWeakDomains, createSubject, getSubjects, getSubjectById,
     updateSubject, deleteSubject, getSubjectQuestionCount,
@@ -413,10 +413,11 @@ app.get('/api/sources/:subjectId', async (req, res) => {
 });
 
 app.post('/api/submit', async (req, res) => {
-    const { source, wrongQuestions, totalQuestions, correctCount, score, subjectId } = req.body;
+    const { source, wrongQuestions, allQuestionIds, totalQuestions, correctCount, score, subjectId } = req.body;
     for (const q of wrongQuestions) {
         await upsertWrongQuestion(req.userId, String(q.id), JSON.stringify(q), source, subjectId);
     }
+    await recordQuestionUsage(req.userId, allQuestionIds, subjectId);
     await saveExamHistory(req.userId, source, totalQuestions, correctCount, score, subjectId);
     res.json({ saved: wrongQuestions.length });
 });

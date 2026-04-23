@@ -18,7 +18,8 @@
       "Bash(grep -v \"^\\\\s*$\\\\|Web\\\\|数据库\\\\|选择\\\\|创建\\\\|学科\\\\|─\\\\|❯\\\\|AWS\\\\|初级\\\\|初三\\\\|外研\")",
       "Bash(node -e \":*)",
       "Bash(npm uninstall:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(rtk git:*)"
     ]
   }
 }

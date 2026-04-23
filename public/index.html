@@ -1299,6 +1299,7 @@ async function submitQuiz() {
         body: JSON.stringify({
           source: viewParams.source || 'all',
           wrongQuestions: wrongForDB,
+          allQuestionIds: quizData.map(q => q.id),
           totalQuestions: total,
           correctCount: total - wrongForDB.length,
           score: finalScore,
